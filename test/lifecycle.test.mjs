@@ -1,0 +1,330 @@
+/**
+ * Cordis lifecycle tests: mount the compiled plugin on a real Context spine
+ * against a local fake OpenViking HTTP server, verifying tool registration,
+ * event-driven adoption, pre-step recall injection, config rejection, dispose
+ * revocation, and remount idempotence. Plus the built-artifact / manifest smoke.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Context } from "@deepseek-ai/cordis";
+import { ToolRuntime } from "@deepseek-ai/dsh-tools";
+import { SystemPrompt } from "@deepseek-ai/dsh-system-prompt";
+import { FileSystem } from "@deepseek-ai/dsh-fs";
+import { AgentRegistry } from "@deepseek-ai/dsh-agent";
+import { SessionStore } from "@deepseek-ai/dsh-session";
+import * as plugin from "../lib/index.js";
+import { fakeServer, okEnvelope, makeAgent, userEvent, awaitTicks } from "./helpers.mjs";
+
+const TOOL_NAMES = ["memsearch", "memfind", "memread", "membrowse", "memcommit", "memgrep", "memglob", "memadd", "memremove", "memqueue"];
+
+class MinimalFs extends FileSystem {
+  async resolve(path, opts) {
+    return { targetKey: `key:${path}`, displayPath: path };
+  }
+  processPath(target) {
+    return target.displayPath;
+  }
+  fileUrl(target) {
+    return `file://${target.displayPath}`;
+  }
+  contains(parent, child) {
+    return true;
+  }
+  async stat(target, signal) {
+    return { version: "v1", type: "file" };
+  }
+  async lstat(path, opts, signal) {
+    return undefined;
+  }
+  async readText(target, signal) {
+    return "";
+  }
+  async streamText(target, signal) {
+    return { async *[Symbol.asyncIterator]() {} };
+  }
+  async readBytes(target, signal, maxBytes) {
+    return new Uint8Array();
+  }
+  async listDir(target, signal) {
+    return [];
+  }
+  async writeText(target, content, expected, signal, policy) {
+    return { kind: "ok" };
+  }
+  async editText(target, edit, expected, signal, policy) {
+    return { kind: "ok" };
+  }
+}
+
+/** A fake OpenViking HTTP service covering every endpoint the plugin uses. */
+async function startFakeOpenViking() {
+  const server = await fakeServer((req, res) => {
+    const url = new URL(req.url, "http://fake");
+    const path = url.pathname;
+    if (path === "/health") return res.end(okEnvelope({ healthy: true, version: "0.4.13" }));
+    if (path === "/api/v1/fs/ls") return res.end(okEnvelope([{ uri: "viking://resources/repo-a", abstract: "Repo A" }]));
+    if (path === "/api/v1/fs/tree") return res.end(okEnvelope({ tree: "t" }));
+    if (path === "/api/v1/fs/stat") return res.end(okEnvelope({ uri: url.searchParams.get("uri"), isDir: false }));
+    if (path === "/api/v1/search/find")
+      return res.end(
+        okEnvelope({ memories: [{ uri: "viking://user/memories/1", level: 2, score: 0.9, abstract: "prefers dark mode" }], resources: [], skills: [], total: 1 }),
+      );
+    if (path === "/api/v1/search/search") return res.end(okEnvelope({ memories: [], resources: [], skills: [], total: 0 }));
+    if (path === "/api/v1/search/grep") return res.end(okEnvelope({ matches: [], count: 0 }));
+    if (path === "/api/v1/search/glob") return res.end(okEnvelope({ matches: [], count: 0 }));
+    if (path === "/api/v1/content/read" || path === "/api/v1/content/overview" || path === "/api/v1/content/abstract")
+      return res.end(okEnvelope("content-body"));
+    if (path === "/api/v1/resources/temp_upload") return res.end(okEnvelope({ temp_file_id: "tmp-1" }));
+    if (path === "/api/v1/resources") return res.end(okEnvelope({ root_uri: "viking://resources/x" }));
+    if (path === "/api/v1/observer/queue") return res.end(okEnvelope({}));
+    if (path === "/api/v1/fs" && req.method === "DELETE") return res.end(okEnvelope({ uri: url.searchParams.get("uri") }));
+    if (path === "/api/v1/sessions" && req.method === "POST") return res.end(okEnvelope({ session_id: "created" }));
+    if (path.startsWith("/api/v1/sessions/") && path.endsWith("/messages") && req.method === "POST")
+      return res.end(okEnvelope({ session_id: url.pathname.split("/")[3], message_count: 1 }));
+    if (path.startsWith("/api/v1/sessions/") && path.endsWith("/commit") && req.method === "POST")
+      return res.end(okEnvelope({ session_id: url.pathname.split("/")[3], status: "accepted", task_id: "t-1", archived: true }));
+    if (path.startsWith("/api/v1/sessions/") && req.method === "GET")
+      return res.end(okEnvelope({ session_id: url.pathname.split("/")[3], message_count: 0 }));
+    if (path.startsWith("/api/v1/tasks/") && req.method === "GET")
+      return res.end(okEnvelope({ task_id: url.pathname.split("/")[3], status: "completed", result: { archived: true, memories_extracted: { total: 0 } } }));
+    res.statusCode = 404;
+    res.end(okEnvelope({ nope: path }));
+  });
+  return server;
+}
+
+function makeConfig(serverUrl, stateFile) {
+  return {
+    endpoint: serverUrl,
+    apiKey: "test-key",
+    account: "astrbot",
+    user: "alice",
+    agentId: "harness-1",
+    timeoutMs: 5000,
+    stateFile,
+    repoContext: { enabled: true, cacheTtlMs: 60000 },
+    autoRecall: { enabled: true, limit: 6, scoreThreshold: 0.15, maxContentChars: 500, tokenBudget: 2000 },
+    autoCommit: { enabled: true, intervalMinutes: 10 },
+  };
+}
+
+function tempState(prefix) {
+  return join(mkdtempSync(join(tmpdir(), "dsh-openviking-lifecycle-")), prefix);
+}
+
+async function mountSpine() {
+  const ctx = new Context();
+  const fibers = [];
+  fibers.push(await ctx.plugin(SessionStore));
+  fibers.push(await ctx.plugin(ToolRuntime));
+  fibers.push(await ctx.plugin(MinimalFs));
+  fibers.push(await ctx.plugin(SystemPrompt));
+  fibers.push(await ctx.plugin(AgentRegistry));
+  return { ctx, fibers };
+}
+
+test("compiled artifact exports the canonical plugin shape", async () => {
+  const mod = await import("../lib/index.js");
+  assert.equal(mod.default, undefined, "no default export");
+  assert.equal(typeof mod.apply, "function");
+  assert.equal(typeof mod.Config, "function");
+  assert.equal(mod.name, "openviking");
+  assert.deepEqual(mod.inject, ["tools", "fs", "systemPrompt", "agents"]);
+});
+
+test("cordis.patch.yml inserts only the openviking row referencing the package", () => {
+  const text = readFileSync(fileURLToPath(new URL("../cordis.patch.yml", import.meta.url)), "utf8");
+  assert.match(text, /id: openviking/);
+  assert.match(text, /name: 'dsh-openviking'/);
+  assert.ok(!/disabled:\s*true/.test(text), "no base rows disabled");
+});
+
+test("config defects fail at load time", async () => {
+  const { ctx, fibers } = await mountSpine();
+  const tryMount = async (config) => {
+    await ctx.plugin(plugin, config);
+  };
+  await assert.rejects(() => tryMount({ ...makeConfig("http://localhost:1933", tempState("a")), timeoutMs: 50 }), /timeoutMs/);
+  await assert.rejects(() => tryMount({ ...makeConfig("http://localhost:1933", tempState("b")), autoRecall: { enabled: true, limit: 0 } }), /limit/);
+  await assert.rejects(() => tryMount({ ...makeConfig("http://localhost:1933", tempState("c")), autoCommit: { enabled: true, intervalMinutes: 0 } }), /intervalMinutes/);
+  for (const fiber of fibers) await fiber.dispose();
+});
+
+test("mount registers ten tools, refreshes context, adopts agents idempotently, and forwards session events", async () => {
+  const server = await startFakeOpenViking();
+  const { ctx, fibers } = await mountSpine();
+
+  // An agent that predates the plugin mount must be adopted and drained.
+  const preAgent = makeAgent("pre-agent", [userEvent("u1", "before plugin")]);
+  ctx.agents.register(preAgent);
+
+  const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("mount")));
+  await awaitTicks(8);
+
+  for (const name of TOOL_NAMES) assert.ok(ctx.tools.get(name), `tool ${name} registered`);
+  assert.equal(ctx.tools.get("meadd"), undefined);
+
+  // Repo context refreshed at mount.
+  assert.ok(server.requests.some((r) => r.url.startsWith("/api/v1/fs/ls?uri=viking%3A%2F%2Fresources%2F")));
+
+  // Existing agent drained at mount (getSession + addSessionMessage).
+  const sessionRequests = server.requests.filter((r) => r.url === "/api/v1/sessions/pre-agent");
+  assert.ok(sessionRequests.length >= 1, "remote session ensured");
+  let sends = server.requests.filter((r) => r.url === "/api/v1/sessions/pre-agent/messages");
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].json.role, "user");
+  assert.equal(sends[0].json.content, "before plugin");
+
+  // Auth headers present on real requests.
+  const first = server.requests[0];
+  assert.equal(first.headers["x-api-key"], "test-key");
+  assert.equal(first.headers["x-openviking-account"], "astrbot");
+
+  // Agent created after mount is adopted through agent/created.
+  const postAgent = makeAgent("post-agent", [userEvent("u2", "after plugin")]);
+  ctx.agents.register(postAgent);
+  await awaitTicks(8);
+  sends = server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages");
+  assert.equal(sends.length, 1, "agent/created adoption drains");
+
+  // session-start dispatch: idempotent, no duplicate sends.
+  ctx.emit("agent/session-start", { agent: postAgent, source: "startup" });
+  await awaitTicks(8);
+  sends = server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages");
+  assert.equal(sends.length, 1, "session-start adoption is idempotent");
+
+  // Live append via session/event dispatch is drained.
+  postAgent.session.append("user/message", {
+    id: "u3",
+    role: "user",
+    content: [{ type: "text", text: "live append" }],
+    source: { kind: "user" },
+  }, { surfaceOp: "append" });
+  ctx.emit("session/event", postAgent.session, postAgent.session.events.at(-1));
+  await awaitTicks(8);
+  sends = server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages");
+  assert.equal(sends.length, 2);
+  assert.equal(sends[1].json.content, "live append");
+
+  await fiber.dispose();
+  for (const f of fibers) await f.dispose();
+  await server.close();
+});
+
+test("pre-step recall reaches the model context channel and emits nothing without user text", async () => {
+  const server = await startFakeOpenViking();
+  const { ctx, fibers } = await mountSpine();
+  const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("prestep")));
+  await awaitTicks(6);
+
+  const recallAgent = makeAgent("recall-agent", []);
+  ctx.agents.register(recallAgent);
+  await awaitTicks(6);
+
+  const messages = [
+    {
+      role: "user",
+      id: "step-msg-1",
+      content: [{ type: "text", text: "tell me about preferences" }],
+      source: { kind: "user" },
+    },
+  ];
+  const decision = await ctx.waterfall("agent/pre-step", { agent: recallAgent, messages, turn: 1, step: 1, signal: new AbortController().signal }, async () => ({ kind: "enter", messages }));
+  assert.equal(decision.kind, "enter");
+  assert.equal(decision.messages, messages, "user messages are never modified");
+
+  // The recalled memories surface through the system-prompt context provider,
+  // i.e. the same channel the UI labels "上下文注入".
+  const assembly = await ctx.systemPrompt.assemble({ agent: recallAgent, scope: recallAgent, signal: new AbortController().signal });
+  const memories = assembly.contexts.find((c) => c.name === "openviking:memories");
+  assert.ok(memories, "memories context contributed");
+  assert.match(memories.text, /<relevant-memories>/);
+  assert.match(memories.text, /prefers dark mode/);
+
+  // Recall search scoped to user memories only.
+  const recallCalls = server.requests.filter((r) => r.url === "/api/v1/search/find" && r.json.target_uri === "viking://user/memories/");
+  assert.ok(recallCalls.length >= 1, "recall search issued against user memories");
+
+  // A step whose user text already carries an injected block must emit nothing.
+  const noopAgent = makeAgent("noop-agent", []);
+  ctx.agents.register(noopAgent);
+  await awaitTicks(4);
+  const noopMessages = [
+    {
+      role: "user",
+      id: "step-msg-2",
+      content: [{ type: "text", text: "already has <relevant-memories> injected content" }],
+      source: { kind: "user" },
+    },
+  ];
+  const noopDecision = await ctx.waterfall("agent/pre-step", { agent: noopAgent, messages: noopMessages, turn: 1, step: 1, signal: new AbortController().signal }, async () => ({ kind: "enter", messages: noopMessages }));
+  assert.equal(noopDecision.messages, noopMessages, "original decision object returned");
+  const noopAssembly = await ctx.systemPrompt.assemble({ agent: noopAgent, scope: noopAgent, signal: new AbortController().signal });
+  const noopMemories = noopAssembly.contexts.find((c) => c.name === "openviking:memories");
+  assert.ok(noopMemories, "memories context contributed");
+  assert.equal(noopMemories.text, "", "no recall block for a message that already carries one");
+
+  await fiber.dispose();
+  for (const f of fibers) await f.dispose();
+  await server.close();
+});
+
+test("dispose stops plugin effects and a remount works cleanly", async () => {
+  const server = await startFakeOpenViking();
+  const { ctx, fibers } = await mountSpine();
+  const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("dispose")));
+  await awaitTicks(6);
+  for (const name of TOOL_NAMES) assert.ok(ctx.tools.get(name));
+
+  await fiber.dispose();
+  await awaitTicks(4);
+
+  // Tools gone: registration revoked.
+  for (const name of TOOL_NAMES) assert.equal(ctx.tools.get(name), undefined);
+
+  // Remount registers exactly once more (no duplicate-registration error).
+  const fiber2 = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("remount")));
+  await awaitTicks(4);
+  for (const name of TOOL_NAMES) assert.ok(ctx.tools.get(name));
+  await fiber2.dispose();
+  for (const f of fibers) await f.dispose();
+  await server.close();
+});
+
+test("autoCommit disabled causes no automatic commit requests", async () => {
+  const server = await startFakeOpenViking();
+  const { ctx, fibers } = await mountSpine();
+  const fiber = await ctx.plugin(
+    { name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply },
+    { ...makeConfig(server.url, tempState("noautocommit")), autoCommit: { enabled: false, intervalMinutes: 10 } },
+  );
+  await awaitTicks(4);
+
+  // Give the plugin pending state: a live agent appends and syncs messages.
+  const agent = makeAgent("no-commit-agent", [userEvent("c1", "first message")]);
+  ctx.agents.register(agent);
+  await awaitTicks(8);
+  agent.session.append("user/message", {
+    id: "c2",
+    role: "user",
+    content: [{ type: "text", text: "second message" }],
+    source: { kind: "user" },
+  }, { surfaceOp: "append" });
+  ctx.emit("session/event", agent.session, agent.session.events.at(-1));
+  await awaitTicks(8);
+
+  // Sync happens (so uncommitted state accumulates), but no commit POST is issued.
+  const sends = server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/messages");
+  assert.equal(sends.length, 2, "user messages synced");
+  const commits = server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/commit");
+  assert.equal(commits.length, 0, "no automatic commit requests while disabled");
+
+  await fiber.dispose();
+  for (const f of fibers) await f.dispose();
+  await server.close();
+});

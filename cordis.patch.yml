@@ -1,0 +1,45 @@
+# dsh-openviking bundle patch.
+#
+# Inserts the OpenViking plugin row into the profile composition. Nothing in
+# the base bundle is disabled or replaced: the ten `mem*` tools are new names,
+# so the default tool-fs rows stay untouched.
+#
+# Harness patches replace the targeted row's WHOLE `config` rather than merging
+# into it. To override any value here, restate the complete config under the
+# same `id: openviking` in your profile's own `cordis.patch.yml` (or a
+# `--patch` overlay) — every key below must be repeated there. Environment
+# values can be bound with `!!js` expressions, e.g.
+# `apiKey: !!js process.env.OPENVIKING_API_KEY ?? ''`.
+- insert:
+    - id: openviking
+      name: 'dsh-openviking'
+      config:
+        # OpenViking HTTP service base URL. The plugin talks HTTP only — it
+        # never shells out to the `ov` CLI and never starts a server.
+        endpoint: 'http://localhost:1933'
+        # X-API-Key header. Empty omits the header. Prefer an env expression in
+        # your own patch; never commit real keys.
+        apiKey: ''
+        # X-OpenViking-Account header (tenant identity). Empty omits it.
+        account: ''
+        # X-OpenViking-User header (user identity). Empty omits it.
+        user: ''
+        # X-OpenViking-Agent header. Empty omits it.
+        agentId: 'deepseek-harness'
+        # Per-request timeout in milliseconds (1000-300000).
+        timeoutMs: 30000
+        # Session-sync state file (`~` is expanded). Plain JSON: message ids
+        # only, never message bodies or keys.
+        stateFile: '~/.dsh/openviking/state.json'
+        repoContext:
+          enabled: true
+          cacheTtlMs: 60000
+        autoRecall:
+          enabled: true
+          limit: 6
+          scoreThreshold: 0.15
+          maxContentChars: 500
+          tokenBudget: 2000
+        autoCommit:
+          enabled: true
+          intervalMinutes: 10
