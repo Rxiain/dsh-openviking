@@ -21,6 +21,12 @@ import { OpenVikingError, isRecord } from "./types.js";
 
 export interface AutoCommitConfig {
   enabled: boolean;
+  /**
+   * Commit after this many uncommitted USER turns (oh-my-pi's retain rhythm:
+   * every N user turns, not wall-clock only). 0 disables the turn trigger.
+   */
+  turns: number;
+  /** Wall-clock fallback: commit sessions with uncommitted messages older than this. */
   intervalMinutes: number;
 }
 
@@ -599,7 +605,21 @@ export class SessionManager {
           continue;
         }
         const timeSince = now - (state.lastCommitTime ?? 0);
-        if (state.uncommittedMessageIds.size === 0 || timeSince < intervalMs) continue;
+        if (state.uncommittedMessageIds.size === 0) continue;
+        // oh-my-pi style rhythm: commit once N user turns accumulated; the
+        // wall-clock interval is a fallback so idle-but-dirty sessions still
+        // flush.
+        const uncommittedUserTurns = [...state.uncommittedMessageIds].filter((id) => id.startsWith("user:")).length;
+        const turnTrigger = this.config.autoCommit.turns > 0 && uncommittedUserTurns >= this.config.autoCommit.turns;
+        if (!turnTrigger) {
+          // With the turn trigger enabled, a never-committed session waits for
+          // the trigger instead of being treated as "last commit long ago".
+          // With turns=0 (trigger disabled) the interval is the only fallback,
+          // so a never-committed session is treated as long overdue and
+          // commits on the first tick.
+          if (this.config.autoCommit.turns > 0 && state.lastCommitTime === undefined) continue;
+          if (state.lastCommitTime !== undefined && timeSince < intervalMs) continue;
+        }
         const agent = this.agents.get(key);
         if (!agent) {
           // No live agent: only already-remote state remains; commit directly.

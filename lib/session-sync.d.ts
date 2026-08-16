@@ -3,6 +3,12 @@ import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { OpenVikingClient } from "./client.js";
 export interface AutoCommitConfig {
     enabled: boolean;
+    /**
+     * Commit after this many uncommitted USER turns (oh-my-pi's retain rhythm:
+     * every N user turns, not wall-clock only). 0 disables the turn trigger.
+     */
+    turns: number;
+    /** Wall-clock fallback: commit sessions with uncommitted messages older than this. */
     intervalMinutes: number;
 }
 export interface SessionSyncConfig {

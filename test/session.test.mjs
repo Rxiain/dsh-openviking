@@ -501,3 +501,113 @@ test("adoption during state load defers until init completes and uses loaded sta
   assert.deepEqual(sends, ["world"], "loaded synced ids honored; no fresh-state overwrite");
   await manager.dispose();
 });
+
+
+test("auto-commit turns rhythm: commits once N user turns accumulate, not wall-clock alone", async (t) => {
+  const { client, calls } = stubSessionClient({
+    async commitSession(sessionId) {
+      calls.push({ name: "commitSession", sessionId });
+      return { session_id: sessionId, status: "completed", archived: false };
+    },
+  });
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 10 } });
+  t.after(() => manager.dispose());
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "一"), userEvent("m2", "二")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  assert.equal(calls.filter((c) => c.name === "addSessionMessage").length, 2);
+
+  // Two user turns < 3 and the session never committed: the turn trigger has
+  // not been reached, so the tick must NOT fall back to wall-clock (a
+  // never-committed session is not treated as "last commit long ago").
+  await manager.runAutoCommitTick();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "turn trigger not reached, no commit");
+
+  // A third user turn arrives: 3 turns accumulate → commit posts.
+  agent.session.append("user/message", userEvent("m3", "三").data, { surfaceOp: "append" });
+  manager.queueDrain(agent);
+  await manager.waitForChain(agent);
+  await manager.runAutoCommitTick();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "3rd user turn triggers the commit");
+  assert.equal(calls.filter((c) => c.name === "addSessionMessage").length, 3);
+});
+
+test("auto-commit turns rhythm: wall-clock still flushes dirty sessions when the turn count is not reached", async (t) => {
+  const { client, calls } = stubSessionClient({
+    async commitSession(sessionId) {
+      calls.push({ name: "commitSession", sessionId });
+      return { session_id: sessionId, status: "completed", archived: false };
+    },
+  });
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 1 } });
+  t.after(() => manager.dispose());
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "一"), userEvent("m2", "二")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  const state = manager.states.get("agent-1");
+  state.lastCommitTime = Date.now() - 2 * 60 * 1000;
+  await manager.runAutoCommitTick();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "wall-clock fallback commits after the interval");
+});
+
+test("auto-commit turns=0 keeps the wall-clock fallback", async () => {
+  const { client, calls } = stubSessionClient({
+    async commitSession(sessionId) {
+      calls.push({ name: "commitSession", sessionId });
+      return { session_id: sessionId, status: "completed", archived: false };
+    },
+  });
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 0, intervalMinutes: 1 } });
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "one")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  const state = manager.states.get("agent-1");
+  state.lastCommitTime = Date.now() - 2 * 60 * 1000;
+  await manager.runAutoCommitTick();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "interval fallback commits");
+  await manager.dispose();
+});
+
+test("auto-commit turns=0: a never-committed session commits on the first tick via the interval fallback", async (t) => {
+  const { client, calls } = stubSessionClient({
+    async commitSession(sessionId) {
+      calls.push({ name: "commitSession", sessionId });
+      return { session_id: sessionId, status: "completed", archived: false };
+    },
+  });
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 0, intervalMinutes: 1 } });
+  t.after(() => manager.dispose());
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "one")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  // lastCommitTime stays undefined: the session never committed before, yet
+  // with turns=0 the interval is the only fallback and must not wait forever.
+  assert.equal(manager.states.get("agent-1").lastCommitTime, undefined);
+  await manager.runAutoCommitTick();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "interval fallback commits a never-committed session");
+});
+
+test("auto-commit turns>0: a never-committed session still waits for the turn trigger", async (t) => {
+  const { client, calls } = stubSessionClient({
+    async commitSession(sessionId) {
+      calls.push({ name: "commitSession", sessionId });
+      return { session_id: sessionId, status: "completed", archived: false };
+    },
+  });
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 1 } });
+  t.after(() => manager.dispose());
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "one"), userEvent("m2", "two")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  // 2 user turns < 3 and the session never committed (lastCommitTime
+  // undefined): it must NOT be treated as "last commit long ago" and must
+  // NOT fall back to wall-clock.
+  assert.equal(manager.states.get("agent-1").lastCommitTime, undefined);
+  await manager.runAutoCommitTick();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "turn trigger not reached, no commit");
+});
