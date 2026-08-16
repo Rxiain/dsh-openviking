@@ -164,6 +164,16 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Poll until an asynchronous observable condition becomes true. */
+export async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 10, description = "condition" } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await sleep(intervalMs);
+  }
+  throw new Error(`timed out waiting for ${description} after ${timeoutMs}ms`);
+}
+
 /** Build the common `{ kind: 'user', source: { kind: 'user' } }` event shapes. */
 export function userEvent(id, text, extra = {}) {
   return {
