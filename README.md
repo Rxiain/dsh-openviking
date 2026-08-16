@@ -1,7 +1,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
-[![Node: ^22.19.0 || >=24.0.0](https://img.shields.io/badge/Node-%5E22.19.0%20%7C%7C%20%3E%3D24.0.0-339933)](package.json)
+[![Node: ^22.19.0 || >=24.0.0](<https://img.shields.io/badge/Node-%5E22.19.0%20%7C%7C%20%3E%3D24.0.0-339933>)](package.json)
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6)](https://www.typescriptlang.org/)
-[![DeepSeek Harness](https://img.shields.io/badge/Platform-DeepSeek%20Harness-4B32C3)](https://deepseek-harness.github.io/deepseek-harness/)
+[![DeepSeek Harness](<https://img.shields.io/badge/Platform-DeepSeek%20Harness-4B32C3>)](https://deepseek-harness.github.io/deepseek-harness/)
 [![OpenViking](https://img.shields.io/badge/Service-OpenViking-0052CC)](https://github.com/volcengine/OpenViking)
 
 **简体中文** | [English](README_EN.md)
@@ -12,20 +12,22 @@
 
 ## 功能
 
-| 工具 | 功能 |
-| --- | --- |
-| `memsearch` | 语义搜索（`auto`/`fast`/`deep`；deep 使用会话上下文） |
-| `memfind` | 快速语义查找，不带会话上下文 |
-| `memread` | 读取 `viking://` URI（`abstract`/`overview`/`read`/`auto`） |
-| `membrowse` | 浏览 `viking://` 文件系统（`list`/`tree`/`stat`） |
-| `memgrep` | 精确/正则内容搜索（默认 `viking://resources/`） |
-| `memglob` | 按 glob 模式枚举文件 |
-| `memadd` | 在 `viking://resources/` 下添加远程 URL 或本地文本文件 |
-| `memremove` | 删除资源——需字面量 `confirm: true` |
-| `memqueue` | 查看观察者队列状态 |
-| `memcommit` | 提交当前会话并提取持久记忆 |
+| 工具          | 功能                                                                 |
+| ------------- | -------------------------------------------------------------------- |
+| `memsearch` | 语义搜索（`auto`/`fast`/`deep`；deep 使用会话上下文）          |
+| `memfind`   | 快速语义查找，不带会话上下文                                         |
+| `memread`   | 读取`viking://` URI（`abstract`/`overview`/`read`/`auto`） |
+| `membrowse` | 浏览`viking://` 文件系统（`list`/`tree`/`stat`）             |
+| `memgrep`   | 精确/正则内容搜索（默认`viking://resources/`）                     |
+| `memglob`   | 按 glob 模式枚举文件                                                 |
+| `memadd`    | 在`viking://resources/` 下添加远程 URL 或本地文本文件              |
+| `memremove` | 删除资源——需字面量`confirm: true`                                |
+| `memqueue`  | 查看观察者队列状态                                                   |
+| `memcommit` | 提交当前会话并提取持久记忆                                           |
 
 另含：已索引仓库上下文注入、通过上下文注入通道自动召回、会话同步 + 自动提交。
+
+![记忆检索调用示例](docs/screenshot-memory-recall.png)
 
 ## 快速开始
 
@@ -37,6 +39,8 @@ sh install.sh [profile-name]          # 默认 profile: dsh-openviking
 dsh plugin --profile <name> add github:Rxiain/dsh-openviking
 dsh --profile <name>
 ```
+
+*（在设置的插件配置中也可以配置哦）*
 
 配置默认指向 `http://localhost:1933`。如需覆盖任何设置，请在 profile 的
 `cordis.patch.yml` 中以 `id: openviking` 写入**完整**配置（patch 整体替换
@@ -80,7 +84,6 @@ dsh --profile <name>
       # 两次自动提交之间的最少分钟数，至少 1
       intervalMinutes: 10
 ```
-
 
 ## 创建账号与密钥
 

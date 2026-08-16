@@ -30,6 +30,8 @@ Also: indexed repository context, auto recall via the context-injection
 channel, and session sync + auto
 commit.
 
+![Memory retrieval in action](docs/screenshot-memory-recall.png)
+
 ## Quick start
 
 ```sh
