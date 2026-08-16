@@ -359,3 +359,63 @@ test("getSession NOT_FOUND error carries code for ensure-session logic", async (
     await server.close();
   }
 });
+
+
+test("writeContent and addSkill map to canonical endpoints, bodies, and unwrapping", async () => {
+  const server = await fakeServer(async (req, res, record) => {
+    if (req.url === "/api/v1/content/write") {
+      const { json: body } = record;
+      if (body?.uri !== "viking://user/memories/x.md") {
+        res.statusCode = 404;
+        res.end(errorEnvelope("NOT_FOUND", "no such file"));
+        return;
+      }
+      res.end(okEnvelope({ uri: "viking://user/memories/x.md", root_uri: "viking://user/memories", context_type: "memory", mode: "append", written_bytes: 12, semantic_updated: true, vector_updated: true }));
+    } else if (req.url === "/api/v1/skills") {
+      res.end(okEnvelope({ status: "success", uri: "viking://agent/skills/deep-dive", name: "deep-dive", auxiliary_files: 0 }));
+    } else if (req.url === "/api/v1/skills/deep-dive" && req.method === "GET") {
+      res.end(okEnvelope({ name: "deep-dive", uri: "viking://user/dsh/skills/deep-dive" }));
+    } else if (req.url === "/api/v1/skills/deep-dive" && req.method === "PUT") {
+      res.end(okEnvelope({ status: "success", uri: "viking://user/dsh/skills/deep-dive", name: "deep-dive", auxiliary_files: 0, action: "update" }));
+    } else {
+      res.statusCode = 404;
+      res.end(errorEnvelope("NOT_FOUND", "no route"));
+    }
+  });
+  try {
+    const client = new OpenVikingClient({ endpoint: server.url });
+    const write = await client.writeContent("viking://user/memories/x.md", "lesson text", { mode: "append", signal: undefined });
+    const writeRecord = server.requests[0];
+    assert.equal(writeRecord.url, "/api/v1/content/write");
+    assert.deepEqual(writeRecord.json, { uri: "viking://user/memories/x.md", content: "lesson text", mode: "append", wait: false });
+    assert.equal(write.context_type, "memory");
+    assert.equal(write.semantic_updated, true);
+
+    const skill = await client.addSkill({ name: "deep-dive", description: "d", content: "body" }, { wait: true });
+    const skillRecord = server.requests[1];
+    assert.equal(skillRecord.url, "/api/v1/skills");
+    assert.equal(skillRecord.method, "POST");
+    assert.deepEqual(skillRecord.json, { data: { name: "deep-dive", description: "d", content: "body" }, wait: true });
+    assert.equal(skill.uri, "viking://agent/skills/deep-dive");
+
+    const fetched = await client.getSkill("deep-dive");
+    const getRecord = server.requests[2];
+    assert.equal(getRecord.url, "/api/v1/skills/deep-dive");
+    assert.equal(getRecord.method, "GET");
+    assert.equal(fetched.name, "deep-dive");
+
+    const updated = await client.updateSkill("deep-dive", { name: "deep-dive", description: "d2", content: "body2" });
+    const updateRecord = server.requests[3];
+    assert.equal(updateRecord.url, "/api/v1/skills/deep-dive");
+    assert.equal(updateRecord.method, "PUT");
+    assert.deepEqual(updateRecord.json, { data: { name: "deep-dive", description: "d2", content: "body2" } });
+    assert.equal(updated.name, "deep-dive");
+
+    await assert.rejects(
+      () => client.writeContent("viking://user/memories/missing.md", "x"),
+      (error) => error.code === "NOT_FOUND",
+    );
+  } finally {
+    await server.close();
+  }
+});

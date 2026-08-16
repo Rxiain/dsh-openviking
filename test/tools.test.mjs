@@ -43,7 +43,7 @@ function byName(tools, name) {
   return tool;
 }
 
-test("registers exactly the ten canonical tool names, no meadd alias", () => {
+test("registers exactly the eleven canonical tool names, no meadd alias", () => {
   const { tools } = makeTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
@@ -53,6 +53,7 @@ test("registers exactly the ten canonical tool names, no meadd alias", () => {
     "memfind",
     "memglob",
     "memgrep",
+    "memlearn",
     "memqueue",
     "memread",
     "memremove",
@@ -501,4 +502,307 @@ test("every tool output is a canonical JSON value, not a JSON string", async () 
     assert.ok(!(typeof value === "string"));
     assert.ok(check(value), "canonical value satisfies its contract");
   }
+});
+
+
+// ─── memlearn ───────────────────────────────────────────────────────────
+
+function learnExec(extra = {}) {
+  const deferred = [];
+  return {
+    signal: SIGNAL(),
+    deferContext(context) {
+      deferred.push(context);
+    },
+    deferred,
+    ...extra,
+  };
+}
+
+test("memlearn skill channel: create vs update, kebab-case validation, secret redaction", async () => {
+  const { client, calls } = stubClient();
+  const notFound = new Error("not found");
+  notFound.code = "NOT_FOUND";
+  client.getSkill = () => Promise.reject(notFound);
+  client.addSkill = async (data) => {
+    calls.push({ name: "addSkill", args: [data] });
+    return { status: "success", uri: "viking://agent/skills/deep-dive", name: "deep-dive" };
+  };
+  const { tools } = makeTools({ client });
+  const exec = learnExec();
+
+  const created = await byName(tools, "memlearn").execute(
+    {
+      memory: "Deep-dive searches need multi-word queries.",
+      skill: {
+        action: "create",
+        name: "deep-dive",
+        description: "When to run a deep search",
+        body: "Use multi-word queries. Token: sk-abcdefghijklmnopqrstuvwxyz123456.",
+        tags: ["search"],
+        allowed_tools: ["memsearch"],
+      },
+    },
+    exec,
+  );
+  assert.equal(created.action, "created");
+  assert.equal(created.kind, "skill");
+  assert.equal(created.uri, "viking://agent/skills/deep-dive");
+  assert.equal(created.redacted, 1);
+  assert.equal(created.injected, true);
+  const skillCall = calls.find((c) => c.name === "addSkill");
+  assert.ok(skillCall, "addSkill invoked");
+  const data = skillCall.args[0];
+  assert.equal(data.name, "deep-dive");
+  assert.match(data.content, /multi-word queries/);
+  assert.ok(!data.content.includes("sk-abcdefghijklmnopqrstuvwxyz123456"), "secret redacted");
+  assert.ok(data.content.includes("[redacted]"));
+  assert.deepEqual(data.tags, ["search"]);
+  assert.deepEqual(data.allowed_tools, ["memsearch"]);
+  // Deferred context carries the redacted lesson into the current turn.
+  assert.equal(exec.deferred.length, 1);
+  assert.equal(exec.deferred[0].source.kind, "plugin");
+  assert.match(exec.deferred[0].content[0].text, /<learned-skill/);
+  assert.ok(!exec.deferred[0].content[0].text.includes("sk-abcdefghijklmnopqrstuvwxyz123456"));
+
+  // Update path: getSkill resolves → PUT /api/v1/skills/{name} (0.4.13
+  // replaces content with a rollback backup, never a blind re-POST).
+  client.getSkill = () => Promise.resolve({ name: "deep-dive", uri: "viking://user/dsh/skills/deep-dive" });
+  client.updateSkill = async (name, data) => {
+    calls.push({ name: "updateSkill", args: [name, data] });
+    return { status: "success", uri: "viking://agent/skills/deep-dive", name };
+  };
+  const updated = await byName(tools, "memlearn").execute(
+    { memory: "same skill, refined", skill: { action: "update", name: "deep-dive", description: "d", body: "v2" } },
+    learnExec(),
+  );
+  assert.equal(updated.action, "updated");
+  const updateCall = calls.find((c) => c.name === "updateSkill");
+  assert.ok(updateCall, "updateSkill invoked on update");
+  assert.equal(updateCall.args[0], "deep-dive");
+  assert.equal(updateCall.args[1].content, "v2");
+
+  // Invalid kebab-case name is refused.
+  await assert.rejects(
+    () => byName(tools, "memlearn").execute(
+      { memory: "x", skill: { action: "create", name: "Deep Dive!", description: "d", body: "b" } },
+      learnExec(),
+    ),
+    /kebab-case/,
+  );
+});
+
+test("memlearn memory channel: explicit target appends via content/write", async () => {
+  const { client, calls } = stubClient();
+  client.writeContent = async (uri, content, opts) => {
+    calls.push({ name: "writeContent", args: [uri, content, opts] });
+    return { uri, mode: opts.mode, written_bytes: content.length };
+  };
+  const { tools } = makeTools({ client });
+  const exec = learnExec();
+
+  const value = await byName(tools, "memlearn").execute(
+    {
+      memory: "Band not recognized → ask for member/album/style details.",
+      context: "session 2026-08-13",
+      target: "viking://user/memories/cases/mem_abc.md",
+    },
+    exec,
+  );
+  assert.equal(value.action, "merged");
+  assert.equal(value.uri, "viking://user/memories/cases/mem_abc.md");
+  const write = calls.find((c) => c.name === "writeContent");
+  assert.ok(write, "writeContent invoked");
+  assert.equal(write.args[2].mode, "append");
+  assert.match(write.args[1], /Band not recognized/);
+  assert.match(write.args[1], /Provenance: session 2026-08-13/);
+  assert.equal(exec.deferred.length, 1);
+});
+
+test("memlearn memory channel: auto dedupe merges into the best hit at/above min_score", async () => {
+  const { client, calls } = stubClient();
+  client.find = () => Promise.resolve({
+    memories: [
+      { uri: "viking://user/memories/patterns/low.md", score: 0.2, abstract: "low" },
+      { uri: "viking://user/memories/patterns/high.md", score: 0.81, abstract: "high" },
+    ],
+    resources: [],
+    skills: [],
+    total: 2,
+  });
+  client.writeContent = async (uri, content, opts) => {
+    calls.push({ name: "writeContent", args: [uri, content, opts] });
+    return { uri };
+  };
+  const { tools } = makeTools({ client });
+
+  const value = await byName(tools, "memlearn").execute(
+    { memory: "Always verify with repo evidence before trusting memory." },
+    learnExec(),
+  );
+  assert.equal(value.action, "merged");
+  assert.equal(value.uri, "viking://user/memories/patterns/high.md");
+  assert.equal(value.score, 0.81);
+  const write = calls.find((c) => c.name === "writeContent");
+  assert.equal(write.args[0], "viking://user/memories/patterns/high.md");
+});
+
+test("memlearn memory channel: below-threshold or empty results yield no-match, no fake write", async () => {
+  const { client, calls } = stubClient();
+  client.find = () => Promise.resolve({ memories: [{ uri: "viking://user/memories/x.md", score: 0.1 }], resources: [], skills: [], total: 1 });
+  const { tools } = makeTools({ client });
+
+  const value = await byName(tools, "memlearn").execute(
+    { memory: "Brand-new topic with no nearby memory." },
+    learnExec(),
+  );
+  assert.equal(value.action, "no-match");
+  assert.equal(value.uri, "");
+  assert.equal(value.injected, false);
+  assert.ok(!calls.some((c) => c.name === "writeContent"), "no write on no-match");
+  assert.match(value.message, /memcommit/);
+
+  client.find = () => Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  const empty = await byName(tools, "memlearn").execute(
+    { memory: "Another brand-new topic." },
+    learnExec(),
+  );
+  assert.equal(empty.action, "no-match");
+});
+
+test("memlearn argument guards: empty input and oversized memory are refused", async () => {
+  const { tools } = makeTools();
+  await assert.rejects(
+    () => byName(tools, "memlearn").execute({}, learnExec()),
+    /nothing to learn/,
+  );
+  await assert.rejects(
+    () => byName(tools, "memlearn").execute({ memory: "x".repeat(8_001) }, learnExec()),
+    /exceeds/,
+  );
+});
+
+
+test("memlearn skill channel: explicit action mismatches are refused (create-when-exists, update-when-missing)", async () => {
+  const { client, calls } = stubClient();
+  const notFound = new Error("not found");
+  notFound.code = "NOT_FOUND";
+  const { tools } = makeTools({ client });
+
+  // action=create but the skill already exists → rejected, nothing written.
+  client.getSkill = () => Promise.resolve({ name: "existing-skill", uri: "viking://user/dsh/skills/existing-skill" });
+  await assert.rejects(
+    () => byName(tools, "memlearn").execute(
+      { memory: "x", skill: { action: "create", name: "existing-skill", description: "d", body: "b" } },
+      learnExec(),
+    ),
+    /already exists.*action=update/,
+  );
+  assert.ok(!calls.some((c) => c.name === "addSkill" || c.name === "updateSkill"), "no write on intent mismatch");
+
+  // action=update but the skill does not exist → rejected, nothing written.
+  client.getSkill = () => Promise.reject(notFound);
+  await assert.rejects(
+    () => byName(tools, "memlearn").execute(
+      { memory: "x", skill: { action: "update", name: "brand-new", description: "d", body: "b" } },
+      learnExec(),
+    ),
+    /does not exist.*action=create/,
+  );
+  assert.ok(!calls.some((c) => c.name === "addSkill" || c.name === "updateSkill"), "no write on intent mismatch");
+});
+
+test("memlearn skill channel: omitted action auto-creates when absent and auto-updates when present", async () => {
+  const { client, calls } = stubClient();
+  const notFound = new Error("not found");
+  notFound.code = "NOT_FOUND";
+  client.getSkill = () => Promise.reject(notFound);
+  client.addSkill = async (data) => {
+    calls.push({ name: "addSkill", args: [data] });
+    return { status: "success", uri: `viking://agent/skills/${data.name}`, name: data.name };
+  };
+  client.updateSkill = async (name, data) => {
+    calls.push({ name: "updateSkill", args: [name, data] });
+    return { status: "success", uri: `viking://agent/skills/${name}`, name };
+  };
+  const { tools } = makeTools({ client });
+
+  // Absent → create.
+  const created = await byName(tools, "memlearn").execute(
+    { memory: "x", skill: { name: "auto-create", description: "d", body: "b" } },
+    learnExec(),
+  );
+  assert.equal(created.action, "created");
+  assert.ok(calls.some((c) => c.name === "addSkill"), "omitted action auto-creates when absent");
+
+  // Present → update.
+  client.getSkill = () => Promise.resolve({ name: "auto-create", uri: "viking://user/dsh/skills/auto-create" });
+  const updated = await byName(tools, "memlearn").execute(
+    { memory: "x", skill: { name: "auto-create", description: "d", body: "b2" } },
+    learnExec(),
+  );
+  assert.equal(updated.action, "updated");
+  assert.ok(calls.some((c) => c.name === "updateSkill"), "omitted action auto-updates when present");
+});
+
+test("memlearn memory channel: dedupe query is secret-redacted before reaching find", async () => {
+  const { client, calls } = stubClient();
+  client.find = async (params) => {
+    calls.push({ name: "find", args: [params] });
+    return { memories: [{ uri: "viking://user/memories/x.md", score: 0.9 }], resources: [], skills: [], total: 1 };
+  };
+  client.writeContent = async (uri, content, opts) => {
+    calls.push({ name: "writeContent", args: [uri, content, opts] });
+    return { uri };
+  };
+  const { tools } = makeTools({ client });
+
+  const value = await byName(tools, "memlearn").execute(
+    { memory: "Keep the api key sk-abcdefghijklmnopqrstuvwxyz123456 out of search." },
+    learnExec(),
+  );
+  assert.equal(value.redacted, 1);
+  const findCall = calls.find((c) => c.name === "find");
+  assert.ok(findCall, "find invoked");
+  const query = findCall.args[0].query;
+  assert.ok(!query.includes("sk-abcdefghijklmnopqrstuvwxyz123456"), "dedupe query redacted");
+  assert.ok(query.includes("[redacted]"));
+  const write = calls.find((c) => c.name === "writeContent");
+  assert.ok(!write.args[1].includes("sk-abcdefghijklmnopqrstuvwxyz123456"), "merged lesson redacted");
+});
+
+test("memlearn skill channel: description secrets are redacted on the wire and counted", async () => {
+  const { client, calls } = stubClient();
+  const notFound = new Error("not found");
+  notFound.code = "NOT_FOUND";
+  client.getSkill = () => Promise.reject(notFound);
+  client.addSkill = async (data) => {
+    calls.push({ name: "addSkill", args: [data] });
+    return { status: "success", uri: `viking://agent/skills/${data.name}`, name: data.name };
+  };
+  const { tools } = makeTools({ client });
+
+  const exec = learnExec();
+  const value = await byName(tools, "memlearn").execute(
+    {
+      memory: "lesson",
+      skill: {
+        action: "create",
+        name: "secret-desc",
+        description: "Use when the token sk-abcdefghijklmnopqrstuvwxyz123456 appears.",
+        body: "body without secrets",
+      },
+    },
+    exec,
+  );
+  const add = calls.find((c) => c.name === "addSkill");
+  assert.ok(add, "addSkill invoked");
+  assert.ok(!add.args[0].description.includes("sk-abcdefghijklmnopqrstuvwxyz123456"), "description redacted on the wire");
+  assert.ok(add.args[0].description.includes("[redacted]"));
+  assert.equal(value.redacted, 1, "description redaction counted");
+  // Deferred lesson also carries the redacted description.
+  assert.equal(exec.deferred.length, 1);
+  const deferredText = exec.deferred[0].content[0].text;
+  assert.ok(!deferredText.includes("sk-abcdefghijklmnopqrstuvwxyz123456"), "deferred lesson redacted");
+  assert.ok(deferredText.includes("[redacted]"));
 });

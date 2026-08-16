@@ -75,6 +75,13 @@ export function stubClient(overrides = {}) {
     glob: record("glob"),
     uploadTempFile: record("uploadTempFile"),
     addResource: record("addResource"),
+    addSkill: record("addSkill"),
+    updateSkill: record("updateSkill"),
+    getSkill: record("getSkill"),
+    // Default silent stats so map-cadence probing never disturbs call
+    // recording in unrelated tests; dedicated tests override this.
+    memoryStats: async () => ({ total_memories: 0, by_category: {} }),
+    writeContent: record("writeContent"),
     queue: record("queue"),
     getSession: record("getSession"),
     createSession: record("createSession"),

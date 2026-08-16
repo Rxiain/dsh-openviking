@@ -111,6 +111,34 @@ export interface AddResourceResult {
   queue?: JsonValue;
 }
 
+/** `/api/v1/content/write` result — write/append to an existing file. */
+export interface WriteContentResult {
+  uri?: string;
+  root_uri?: string;
+  context_type?: string;
+  mode?: string;
+  written_bytes?: number;
+  semantic_updated?: boolean;
+  vector_updated?: boolean;
+  queue_status?: JsonValue;
+}
+
+/** `/api/v1/stats/memories` result (category counts for the calling user). */
+export interface MemoryStats {
+  total_memories?: number;
+  by_category?: Record<string, number>;
+  hotness_distribution?: Record<string, number>;
+  staleness?: Record<string, number>;
+}
+
+/** `/api/v1/resources/skills` result. */
+export interface AddSkillResult {
+  status?: string;
+  uri?: string;
+  name?: string;
+  auxiliary_files?: number;
+}
+
 /** `/api/v1/fs` DELETE result. */
 export interface RemoveResult {
   uri?: string;

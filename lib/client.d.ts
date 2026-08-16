@@ -7,7 +7,7 @@
  * `@tanyouqing/pi-openviking` reference HTTP layer. The API key never enters
  * error messages.
  */
-import { type AddMessageResult, type AddResourceResult, type CommitResult, type CreateSessionResult, type FsStatResult, type GlobResult, type GrepResult, type HealthIdentity, type HealthResult, type Json, type QueueResult, type RemoveResult, type SearchResult, type SessionInfo, type TaskResult } from "./types.js";
+import { type AddMessageResult, type AddResourceResult, type AddSkillResult, type WriteContentResult, type CommitResult, type CreateSessionResult, type FsStatResult, type GlobResult, type GrepResult, type HealthIdentity, type HealthResult, type Json, type MemoryStats, type QueueResult, type RemoveResult, type SearchResult, type SessionInfo, type TaskResult } from "./types.js";
 export interface OpenVikingClientOptions {
     /** Base URL of the OpenViking HTTP service (trailing `/` tolerated). */
     endpoint: string;
@@ -145,7 +145,51 @@ export declare class OpenVikingClient {
         requestTimeoutMs?: number;
         signal?: AbortSignal;
     }): Promise<AddResourceResult>;
+    /**
+     * POST a skill to `/api/v1/skills` (OpenViking >= 0.4.13 layout; earlier
+     * 0.3.x checkouts exposed `/api/v1/resources/skills` instead). `data` is an
+     * inline skill dict (`name`, `description`, `content`, optional
+     * `tags`/`allowed_tools`) — never a host filesystem path. The service
+     * writes the skill, generates the L1 overview and indexes the vector entry.
+     */
+    addSkill(data: Record<string, unknown>, options?: {
+        wait?: boolean;
+        signal?: AbortSignal;
+    }): Promise<AddSkillResult>;
+    /**
+     * GET a skill by name (`/api/v1/skills/{name}`, OpenViking >= 0.4.13).
+     * Resolves the skill through the service (0.4.13 stores skills under the
+     * user scope, e.g. `viking://user/dsh/skills/<name>`), so existence can be
+     * checked without knowing the storage layout. Throws `OpenVikingError` with
+     * code `NOT_FOUND` when the skill does not exist.
+     */
+    getSkill(skillName: string, signal?: AbortSignal): Promise<Json>;
+    /**
+     * PUT a skill to `/api/v1/skills/{name}` (OpenViking >= 0.4.13): replace
+     * an existing agent skill with new content. The service snapshots a backup
+     * of the previous skill first and restores it when the update fails, so an
+     * interrupted update never leaves a half-written playbook behind.
+     */
+    updateSkill(skillName: string, data: Record<string, unknown>, options?: {
+        wait?: boolean;
+        signal?: AbortSignal;
+    }): Promise<AddSkillResult>;
+    /**
+     * POST `/api/v1/content/write`: replace or append text to an existing
+     * viking:// file. The service keeps the memory `MEMORY_FIELDS` metadata
+     * block intact, re-embeds the single file and enqueues a semantic refresh
+     * for the containing memory directory. Only existing files can be written
+     * (the service has no create-memory endpoint; new memories are produced by
+     * session commits).
+     */
+    writeContent(uri: string, content: string, options?: {
+        mode?: "replace" | "append";
+        wait?: boolean;
+        signal?: AbortSignal;
+    }): Promise<WriteContentResult>;
     queue(signal?: AbortSignal): Promise<QueueResult>;
+    /** GET `/api/v1/stats/memories`: category counts for the calling user. */
+    memoryStats(signal?: AbortSignal): Promise<MemoryStats>;
     /** GET an existing session. Throws `OpenVikingError` with code `NOT_FOUND` when absent. */
     getSession(sessionId: string, signal?: AbortSignal): Promise<SessionInfo>;
     /** POST a new session with the requested id (idempotent in effect). */
