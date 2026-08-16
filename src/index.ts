@@ -50,12 +50,24 @@ export interface AutoRecallConfig {
   maxContentChars: number;
   /** Approximate token budget; the injected block is capped at `tokenBudget * 4` chars. */
   tokenBudget: number;
+  /** Also search the agent space (`viking://agent/`) for cases/patterns/tools/skills memories and skill playbooks. */
+  agentSpaces: boolean;
+  /** Re-search mid-message every N tool steps and inject only new memories (0 disables). */
+  refreshSteps: number;
+  /** Memory map: inject on session start, refresh every N user turns (2+); 1 = start only, 0 = never. */
+  startupMapEveryTurns: number;
 }
 
 export interface AutoCommitConfig {
   /** Periodically commit sessions with uncommitted messages. */
   enabled: boolean;
-  /** Minimum minutes between automatic commits. */
+  /**
+   * Commit after this many uncommitted USER turns (oh-my-pi style rhythm:
+   * retain every N user turns instead of only wall-clock). 0 disables the
+   * turn trigger and falls back to `intervalMinutes` alone.
+   */
+  turns: number;
+  /** Wall-clock fallback: commit any session with uncommitted messages older than this. */
   intervalMinutes: number;
 }
 
@@ -93,10 +105,14 @@ const autoRecallShape = z.object({
   scoreThreshold: z.number().min(0).max(1).default(0.15),
   maxContentChars: z.natural().min(100).max(5000).default(500),
   tokenBudget: z.natural().min(100).max(10000).default(2000),
+  agentSpaces: z.boolean().default(true),
+  refreshSteps: z.natural().min(0).max(100).default(10),
+  startupMapEveryTurns: z.natural().min(0).max(100).default(5),
 });
 
 const autoCommitShape = z.object({
   enabled: z.boolean().default(true),
+  turns: z.natural().min(0).max(100).default(3),
   intervalMinutes: z.natural().min(1).default(10),
 });
 
@@ -238,6 +254,18 @@ export function apply(ctx: Context, config: Config): void {
     text: () => repoContext.getPrompt(),
   });
 
+  // Session-start memory map: a compact category overview injected once per
+  // session (oh-my-pi's Memory Guidance), so the agent knows what the library
+  // holds and how to fetch details before the first user message arrives.
+  ctx.systemPrompt.context({
+    name: "openviking:memories-startup",
+    order: 125,
+    text: (assembly) => {
+      const agent = assembly.agent;
+      return agent ? recall.takeStartupBlock(String(agent.id)) : "";
+    },
+  });
+
   // Auto-recall enters the model context through the context-injection
   // channel (a user-role context message, source.kind "plugin"), never as an
   // edit to the user's own message. The slot is filled by `agent/pre-step`
@@ -256,13 +284,17 @@ export function apply(ctx: Context, config: Config): void {
   });
 
   ctx.on("agent/session-start", (payload) => {
-    // Non-waiting notification: queue refresh and adoption without blocking.
+    // Non-waiting notifications: queue refresh and adoption only; the memory
+    // map is driven by user turns inside `agent/pre-step`.
     repoContext.refresh().catch(() => {});
     sessionManager.adopt(payload.agent);
   });
 
   ctx.on("agent/disposed", (payload) => {
     sessionManager.forget(payload.agent);
+    // Release all per-agent recall state (slots, caches, map cadence) so a
+    // disposed agent's memory never lingers in the recall layer.
+    recall.forget(String(payload.agent.id));
   });
 
   ctx.on(

@@ -38,11 +38,23 @@ export interface AutoRecallConfig {
     maxContentChars: number;
     /** Approximate token budget; the injected block is capped at `tokenBudget * 4` chars. */
     tokenBudget: number;
+    /** Also search the agent space (`viking://agent/`) for cases/patterns/tools/skills memories and skill playbooks. */
+    agentSpaces: boolean;
+    /** Re-search mid-message every N tool steps and inject only new memories (0 disables). */
+    refreshSteps: number;
+    /** Memory map: inject on session start, refresh every N user turns (2+); 1 = start only, 0 = never. */
+    startupMapEveryTurns: number;
 }
 export interface AutoCommitConfig {
     /** Periodically commit sessions with uncommitted messages. */
     enabled: boolean;
-    /** Minimum minutes between automatic commits. */
+    /**
+     * Commit after this many uncommitted USER turns (oh-my-pi style rhythm:
+     * retain every N user turns instead of only wall-clock). 0 disables the
+     * turn trigger and falls back to `intervalMinutes` alone.
+     */
+    turns: number;
+    /** Wall-clock fallback: commit any session with uncommitted messages older than this. */
     intervalMinutes: number;
 }
 export interface Config {
@@ -85,18 +97,26 @@ export declare const Config: z<Schemastery.ObjectS<{
         scoreThreshold: z<number, number>;
         maxContentChars: z<number, number>;
         tokenBudget: z<number, number>;
+        agentSpaces: z<boolean, boolean>;
+        refreshSteps: z<number, number>;
+        startupMapEveryTurns: z<number, number>;
     }>, Schemastery.ObjectT<{
         enabled: z<boolean, boolean>;
         limit: z<number, number>;
         scoreThreshold: z<number, number>;
         maxContentChars: z<number, number>;
         tokenBudget: z<number, number>;
+        agentSpaces: z<boolean, boolean>;
+        refreshSteps: z<number, number>;
+        startupMapEveryTurns: z<number, number>;
     }>>;
     autoCommit: z<Schemastery.ObjectS<{
         enabled: z<boolean, boolean>;
+        turns: z<number, number>;
         intervalMinutes: z<number, number>;
     }>, Schemastery.ObjectT<{
         enabled: z<boolean, boolean>;
+        turns: z<number, number>;
         intervalMinutes: z<number, number>;
     }>>;
 }>, Schemastery.ObjectT<{
@@ -120,18 +140,26 @@ export declare const Config: z<Schemastery.ObjectS<{
         scoreThreshold: z<number, number>;
         maxContentChars: z<number, number>;
         tokenBudget: z<number, number>;
+        agentSpaces: z<boolean, boolean>;
+        refreshSteps: z<number, number>;
+        startupMapEveryTurns: z<number, number>;
     }>, Schemastery.ObjectT<{
         enabled: z<boolean, boolean>;
         limit: z<number, number>;
         scoreThreshold: z<number, number>;
         maxContentChars: z<number, number>;
         tokenBudget: z<number, number>;
+        agentSpaces: z<boolean, boolean>;
+        refreshSteps: z<number, number>;
+        startupMapEveryTurns: z<number, number>;
     }>>;
     autoCommit: z<Schemastery.ObjectS<{
         enabled: z<boolean, boolean>;
+        turns: z<number, number>;
         intervalMinutes: z<number, number>;
     }>, Schemastery.ObjectT<{
         enabled: z<boolean, boolean>;
+        turns: z<number, number>;
         intervalMinutes: z<number, number>;
     }>>;
 }>>;
