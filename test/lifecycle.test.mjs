@@ -18,7 +18,7 @@ import { FileSystem } from "@deepseek-ai/dsh-fs";
 import { AgentRegistry } from "@deepseek-ai/dsh-agent";
 import { SessionStore } from "@deepseek-ai/dsh-session";
 import * as plugin from "../lib/index.js";
-import { fakeServer, okEnvelope, makeAgent, userEvent, awaitTicks } from "./helpers.mjs";
+import { fakeServer, okEnvelope, makeAgent, userEvent, waitFor } from "./helpers.mjs";
 
 const TOOL_NAMES = ["memsearch", "memfind", "memread", "membrowse", "memcommit", "memgrep", "memglob", "memadd", "memremove", "memqueue"];
 
@@ -117,6 +117,23 @@ function tempState(prefix) {
   return join(mkdtempSync(join(tmpdir(), "dsh-openviking-lifecycle-")), prefix);
 }
 
+/** Register LIFO cleanup so a failed assertion cannot leave fibers or servers alive. */
+function cleanupStack(t) {
+  const callbacks = [];
+  t.after(async () => {
+    const errors = [];
+    for (const callback of callbacks.reverse()) {
+      try {
+        await callback();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, "lifecycle test cleanup failed");
+  });
+  return (callback) => callbacks.push(callback);
+}
+
 async function mountSpine() {
   const ctx = new Context();
   const fibers = [];
@@ -144,27 +161,37 @@ test("cordis.patch.yml inserts only the openviking row referencing the package",
   assert.ok(!/disabled:\s*true/.test(text), "no base rows disabled");
 });
 
-test("config defects fail at load time", async () => {
+test("config defects fail at load time", async (t) => {
+  const cleanup = cleanupStack(t);
   const { ctx, fibers } = await mountSpine();
+  for (const fiber of fibers) cleanup(() => fiber.dispose());
   const tryMount = async (config) => {
     await ctx.plugin(plugin, config);
   };
   await assert.rejects(() => tryMount({ ...makeConfig("http://localhost:1933", tempState("a")), timeoutMs: 50 }), /timeoutMs/);
   await assert.rejects(() => tryMount({ ...makeConfig("http://localhost:1933", tempState("b")), autoRecall: { enabled: true, limit: 0 } }), /limit/);
   await assert.rejects(() => tryMount({ ...makeConfig("http://localhost:1933", tempState("c")), autoCommit: { enabled: true, intervalMinutes: 0 } }), /intervalMinutes/);
-  for (const fiber of fibers) await fiber.dispose();
 });
 
-test("mount registers ten tools, refreshes context, adopts agents idempotently, and forwards session events", async () => {
+test("mount registers ten tools, refreshes context, adopts agents idempotently, and forwards session events", async (t) => {
+  const cleanup = cleanupStack(t);
   const server = await startFakeOpenViking();
+  cleanup(() => server.close());
   const { ctx, fibers } = await mountSpine();
+  for (const baseFiber of fibers) cleanup(() => baseFiber.dispose());
 
   // An agent that predates the plugin mount must be adopted and drained.
   const preAgent = makeAgent("pre-agent", [userEvent("u1", "before plugin")]);
   ctx.agents.register(preAgent);
 
   const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("mount")));
-  await awaitTicks(8);
+  cleanup(() => fiber.dispose());
+  await waitFor(
+    () =>
+      server.requests.some((r) => r.url.startsWith("/api/v1/fs/ls?uri=viking%3A%2F%2Fresources%2F")) &&
+      server.requests.some((r) => r.url === "/api/v1/sessions/pre-agent/messages"),
+    { description: "initial repository refresh and pre-existing agent drain" },
+  );
 
   for (const name of TOOL_NAMES) assert.ok(ctx.tools.get(name), `tool ${name} registered`);
   assert.equal(ctx.tools.get("meadd"), undefined);
@@ -188,13 +215,15 @@ test("mount registers ten tools, refreshes context, adopts agents idempotently, 
   // Agent created after mount is adopted through agent/created.
   const postAgent = makeAgent("post-agent", [userEvent("u2", "after plugin")]);
   ctx.agents.register(postAgent);
-  await awaitTicks(8);
+  await waitFor(
+    () => server.requests.some((r) => r.url === "/api/v1/sessions/post-agent/messages"),
+    { description: "new agent drain" },
+  );
   sends = server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages");
   assert.equal(sends.length, 1, "agent/created adoption drains");
 
   // session-start dispatch: idempotent, no duplicate sends.
   ctx.emit("agent/session-start", { agent: postAgent, source: "startup" });
-  await awaitTicks(8);
   sends = server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages");
   assert.equal(sends.length, 1, "session-start adoption is idempotent");
 
@@ -206,25 +235,26 @@ test("mount registers ten tools, refreshes context, adopts agents idempotently, 
     source: { kind: "user" },
   }, { surfaceOp: "append" });
   ctx.emit("session/event", postAgent.session, postAgent.session.events.at(-1));
-  await awaitTicks(8);
+  await waitFor(
+    () => server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages").length === 2,
+    { description: "live session event drain" },
+  );
   sends = server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages");
   assert.equal(sends.length, 2);
   assert.equal(sends[1].json.content, "live append");
-
-  await fiber.dispose();
-  for (const f of fibers) await f.dispose();
-  await server.close();
 });
 
-test("pre-step recall reaches the model context channel and emits nothing without user text", async () => {
+test("pre-step recall reaches the model context channel and emits nothing without user text", async (t) => {
+  const cleanup = cleanupStack(t);
   const server = await startFakeOpenViking();
+  cleanup(() => server.close());
   const { ctx, fibers } = await mountSpine();
+  for (const baseFiber of fibers) cleanup(() => baseFiber.dispose());
   const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("prestep")));
-  await awaitTicks(6);
+  cleanup(() => fiber.dispose());
 
   const recallAgent = makeAgent("recall-agent", []);
   ctx.agents.register(recallAgent);
-  await awaitTicks(6);
 
   const messages = [
     {
@@ -253,7 +283,6 @@ test("pre-step recall reaches the model context channel and emits nothing withou
   // A step whose user text already carries an injected block must emit nothing.
   const noopAgent = makeAgent("noop-agent", []);
   ctx.agents.register(noopAgent);
-  await awaitTicks(4);
   const noopMessages = [
     {
       role: "user",
@@ -268,47 +297,48 @@ test("pre-step recall reaches the model context channel and emits nothing withou
   const noopMemories = noopAssembly.contexts.find((c) => c.name === "openviking:memories");
   assert.ok(noopMemories, "memories context contributed");
   assert.equal(noopMemories.text, "", "no recall block for a message that already carries one");
-
-  await fiber.dispose();
-  for (const f of fibers) await f.dispose();
-  await server.close();
 });
 
-test("dispose stops plugin effects and a remount works cleanly", async () => {
+test("dispose stops plugin effects and a remount works cleanly", async (t) => {
+  const cleanup = cleanupStack(t);
   const server = await startFakeOpenViking();
+  cleanup(() => server.close());
   const { ctx, fibers } = await mountSpine();
+  for (const baseFiber of fibers) cleanup(() => baseFiber.dispose());
   const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("dispose")));
-  await awaitTicks(6);
+  cleanup(() => fiber.dispose());
   for (const name of TOOL_NAMES) assert.ok(ctx.tools.get(name));
 
   await fiber.dispose();
-  await awaitTicks(4);
 
   // Tools gone: registration revoked.
   for (const name of TOOL_NAMES) assert.equal(ctx.tools.get(name), undefined);
 
   // Remount registers exactly once more (no duplicate-registration error).
   const fiber2 = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("remount")));
-  await awaitTicks(4);
+  cleanup(() => fiber2.dispose());
   for (const name of TOOL_NAMES) assert.ok(ctx.tools.get(name));
-  await fiber2.dispose();
-  for (const f of fibers) await f.dispose();
-  await server.close();
 });
 
-test("autoCommit disabled causes no automatic commit requests", async () => {
+test("autoCommit disabled causes no automatic commit requests", async (t) => {
+  const cleanup = cleanupStack(t);
   const server = await startFakeOpenViking();
+  cleanup(() => server.close());
   const { ctx, fibers } = await mountSpine();
+  for (const baseFiber of fibers) cleanup(() => baseFiber.dispose());
   const fiber = await ctx.plugin(
     { name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply },
     { ...makeConfig(server.url, tempState("noautocommit")), autoCommit: { enabled: false, intervalMinutes: 10 } },
   );
-  await awaitTicks(4);
+  cleanup(() => fiber.dispose());
 
   // Give the plugin pending state: a live agent appends and syncs messages.
   const agent = makeAgent("no-commit-agent", [userEvent("c1", "first message")]);
   ctx.agents.register(agent);
-  await awaitTicks(8);
+  await waitFor(
+    () => server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/messages").length === 1,
+    { description: "initial no-auto-commit agent drain" },
+  );
   agent.session.append("user/message", {
     id: "c2",
     role: "user",
@@ -316,15 +346,14 @@ test("autoCommit disabled causes no automatic commit requests", async () => {
     source: { kind: "user" },
   }, { surfaceOp: "append" });
   ctx.emit("session/event", agent.session, agent.session.events.at(-1));
-  await awaitTicks(8);
+  await waitFor(
+    () => server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/messages").length === 2,
+    { description: "second no-auto-commit agent drain" },
+  );
 
   // Sync happens (so uncommitted state accumulates), but no commit POST is issued.
   const sends = server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/messages");
   assert.equal(sends.length, 2, "user messages synced");
   const commits = server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/commit");
   assert.equal(commits.length, 0, "no automatic commit requests while disabled");
-
-  await fiber.dispose();
-  for (const f of fibers) await f.dispose();
-  await server.close();
 });
