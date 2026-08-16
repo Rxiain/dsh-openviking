@@ -16,6 +16,7 @@
 import z from "@deepseek-ai/schemastery";
 import type { Context } from "@deepseek-ai/cordis";
 import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { makeBridgeRoutes } from "./settings-bridge.js";
 import { OpenVikingClient } from "./client.js";
 import { createMemoryRecall } from "./memory-recall.js";
 import { createRepoContext } from "./repo-context.js";
@@ -195,6 +196,25 @@ export function apply(ctx: Context, config: Config): void {
       sessionManager.reconfigure(sessionSyncConfigOf(cfg));
     },
     validate: (value) => assertValidEndpoint(value.endpoint),
+  });
+
+  // Loopback settings bridge: the rc.6 host-apiproxy refuses third-party
+  // namespaces at the RPC boundary, so this deployment re-serves the
+  // openviking section through the host settings seam on same-origin,
+  // loopback-only routes for the web card. Mounted only when a settings
+  // service AND a web server are present (headless profiles never see it);
+  // the browser half keeps the official settings scope as its primary
+  // transport and falls back to the bridge only when the namespace is not
+  // exposed.
+  ctx.inject(["settings"], (sctx) => {
+    const webServer = sctx.get("webServer");
+    if (webServer === undefined) return;
+    sctx.effect(() => {
+      const disposers = makeBridgeRoutes({ settings: sctx.settings }).map((route) => webServer.register(route));
+      return () => {
+        for (const dispose of disposers) dispose();
+      };
+    }, "openviking: settings bridge");
   });
 
   // One effect owns the manager lifecycle: init (state load + adoption +

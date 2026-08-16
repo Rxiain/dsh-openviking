@@ -82,23 +82,6 @@ dsh --profile <name>
 ```
 
 
-## 可视化配置（dsh Web UI）
-
-部署 `dsh web` 时，插件配置可以直接在浏览器里编辑：**设置 → 插件 → 插件配置 → OpenViking**。卡片字段与上方 YAML 完全对应，保存后写入 `$DSH_HOME/settings.yaml` 的用户层，叠加在 profile 的 `id: openviking` 配置之上：
-
-- 请求相关字段（`endpoint`、`apiKey`、`account`/`user`/`agentId`、`timeoutMs`、`repoContext.*`、`autoRecall.*`、自动提交间隔）**保存即生效**；
-- `stateFile` 在插件启动时读取，修改后需重启；
-- 已覆盖的字段显示「已覆盖」徽标，可一键「恢复默认」（清掉用户层覆盖，重新继承 profile 配置）；
-- 非法值（含非 http(s) 的 `endpoint`）在保存时被设置层拒绝，不会写入。
-
-该卡片是插件的浏览器半（`dsh.client` + `exports["./client"]`，构建产物 `lib/client-ui.js`）。宿主侧只把白名单内的 settings 命名空间下发给浏览器，因此本部署需要把 `openviking` 加入已安装 `@deepseek-ai/dsh-host-apiproxy` 的 `WEB_SETTINGS_NAMESPACES`——仓库提供了一键脚本（把打过补丁的副本放到 profile 自己的 `node_modules`，不改动系统安装）：
-
-```sh
-node scripts/patch-dsh-exposure.mjs --profile web
-```
-
-在 `dsh plugin --profile web add|remove`（pnpm 会清理 profile 的 `node_modules`）或升级 dsh 之后重新执行；如果插件页里卡片消失，先跑这个脚本再重启 `dsh web`。
-
 ## 创建账号与密钥
 
 管理命令需要 root 密钥（本地服务通常位于 `~/.openviking/root_api_key.txt`）：

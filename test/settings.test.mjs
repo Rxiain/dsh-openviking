@@ -21,6 +21,8 @@ import { AgentRegistry } from "@deepseek-ai/dsh-agent";
 import { SessionStore } from "@deepseek-ai/dsh-session";
 import { SettingsProvider } from "@deepseek-ai/dsh-settings";
 import * as plugin from "../lib/index.js";
+import { SettingsConflictError } from "@deepseek-ai/dsh-settings";
+import { makeBridgeHandlers, isLoopbackRequest } from "../lib/settings-bridge.js";
 import { fakeServer, okEnvelope, makeAgent, userEvent, awaitTicks } from "./helpers.mjs";
 
 class MinimalFs extends FileSystem {
@@ -232,4 +234,116 @@ test("browser half artifact wraps into the loader format with the canonical entr
   });
   assert.equal(typeof exported.apply, "function");
   assert.deepEqual([...exported.inject], ["slots", "locale", "connection", "remote", "settingsScope"]);
+});
+
+
+test("settings bridge serves the openviking namespace through the seam with official-shaped refusals", async () => {
+  const server = await startFakeOpenViking();
+  const { ctx, fibers } = await mountSpine();
+  fibers.push(await ctx.plugin(MemorySettings));
+  const fiber = await ctx.plugin(PLUGIN, makeConfig(server.url, tempState("bridge")));
+  await awaitTicks(8);
+
+  const handlers = makeBridgeHandlers({ settings: ctx.settings });
+
+  // describe: the registered namespace rides the bridge, redacted and layered.
+  const described = await handlers.describe();
+  assert.equal(described.ok, true);
+  if (!described.ok) return;
+  assert.equal(described.value.writable, true);
+  assert.equal(described.value.namespaces.length, 1);
+  const view = described.value.namespaces[0];
+  assert.equal(view.ns, "openviking");
+  assert.equal(view.value.endpoint, server.url);
+  assert.equal(view.value.autoRecall.limit, 6);
+  assert.equal(view.user, undefined);
+
+  // mutate: one batched write lands in the user layer and bumps the revision.
+  const before = view.revision;
+  const mutated = await handlers.mutate({
+    ns: "openviking",
+    ops: [
+      { op: "set", path: ["timeoutMs"], value: 45678 },
+      { op: "set", path: ["autoRecall", "limit"], value: 3 },
+    ],
+  });
+  assert.equal(mutated.ok, true);
+  if (!mutated.ok) return;
+  assert.equal(mutated.value.value.timeoutMs, 45678);
+  assert.equal(mutated.value.value.autoRecall.limit, 3);
+  assert.deepEqual(mutated.value.user, { timeoutMs: 45678, autoRecall: { limit: 3 } });
+  assert.ok(mutated.value.revision > before);
+
+  // The plugin's live source follows the bridge write.
+  await awaitTicks(2);
+  assert.equal(ctx.settings.get("openviking").timeoutMs, 45678);
+
+  // unset re-inherits the composition layer.
+  const cleared = await handlers.mutate({ ns: "openviking", ops: [{ op: "unset", path: ["timeoutMs"] }] });
+  assert.equal(cleared.ok, true);
+  if (cleared.ok) {
+    assert.equal(cleared.value.value.timeoutMs, 30000);
+    assert.equal(cleared.value.user?.timeoutMs, undefined);
+  }
+
+  // The seam's endpoint validator still refuses through the bridge.
+  const rejected = await handlers.mutate({ ns: "openviking", ops: [{ op: "set", path: ["endpoint"], value: "not-a-url" }] });
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) {
+    assert.equal(rejected.code, "settings-rejected");
+    assert.match(rejected.message, /invalid endpoint/);
+  }
+
+  // A stale revision is refused as a conflict, like the official RPC.
+  const stale = await handlers.mutate({
+    ns: "openviking",
+    ops: [{ op: "set", path: ["account"], value: "x" }],
+    expectedRevision: 0,
+  });
+  assert.equal(stale.ok, false);
+  if (!stale.ok) assert.equal(stale.code, "settings-conflict");
+
+  // Foreign namespaces and malformed bodies are refused, never served.
+  const foreign = await handlers.mutate({ ns: "other", ops: [{ op: "set", path: ["a"], value: 1 }] });
+  assert.equal(foreign.ok, false);
+  const malformed = await handlers.mutate({ ns: "openviking", ops: "nope" });
+  assert.equal(malformed.ok, false);
+
+  // Disposal removes the namespace from the bridge view.
+  await fiber.dispose();
+  const after = await handlers.describe();
+  assert.equal(after.ok, true);
+  if (after.ok) assert.deepEqual(after.value.namespaces, []);
+
+  for (const f of fibers) await f.dispose();
+  await server.close();
+});
+
+test("loopback guard accepts local requests and refuses foreign origins", () => {
+  const local = {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: { host: "127.0.0.1:3080", "sec-fetch-site": "same-origin" },
+  };
+  assert.equal(isLoopbackRequest(local), true);
+
+  const remoteAddress = { socket: { remoteAddress: "10.0.0.5" }, headers: { host: "127.0.0.1" } };
+  assert.equal(isLoopbackRequest(remoteAddress), false);
+
+  const foreignHost = { socket: { remoteAddress: "127.0.0.1" }, headers: { host: "evil.example" } };
+  assert.equal(isLoopbackRequest(foreignHost), false);
+
+  const crossSite = { socket: { remoteAddress: "127.0.0.1" }, headers: { host: "127.0.0.1", "sec-fetch-site": "cross-site" } };
+  assert.equal(isLoopbackRequest(crossSite), false);
+
+  const foreignOrigin = {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: { host: "127.0.0.1", origin: "https://evil.example" },
+  };
+  assert.equal(isLoopbackRequest(foreignOrigin), false);
+
+  const sameOrigin = {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: { host: "127.0.0.1:3080", origin: "http://127.0.0.1:3080" },
+  };
+  assert.equal(isLoopbackRequest(sameOrigin), true);
 });

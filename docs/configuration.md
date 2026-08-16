@@ -55,7 +55,6 @@ A complete `id: openviking` row with an environment-bound API key:
       enabled: true
       intervalMinutes: 10
 ```
-
 ## Authentication and secrets
 
 For every non-empty configured value, requests carry the corresponding header:
@@ -84,7 +83,6 @@ There is no plugin-level `enabled` field. Disable the Cordis row:
   disabled: true
 ```
 
-
 ## Visual configuration in the dsh web UI
 
 When the deployment runs the dsh browser UI (`dsh web`), the OpenViking
@@ -107,16 +105,16 @@ fields as this document through the user-settings seam (`settings.yaml` at
 
 The card is the plugin's browser half (`dsh.client` + `exports["./client"]`,
 built to `lib/client-ui.js`); the host serves it at
-`/plugins/dsh-openviking/client.js` in the web profile. The card needs no
-harness bundle changes, but the host only serves settings namespaces on an
-explicit allowlist (`WEB_SETTINGS_NAMESPACES` in the installed
-`@deepseek-ai/dsh-host-apiproxy`), so this deployment ships a profile-local
-patched copy of that package. Re-apply it with:
+`/plugins/dsh-openviking/client.js` in the web profile.
 
-```bash
-node scripts/patch-dsh-exposure.mjs --profile web
-```
-
-Run it after `dsh plugin --profile web add|remove` (pnpm prunes the profile
-`node_modules`), after upgrading dsh, or whenever the card disappears from
-the Plugins page.
+**Exposure.** The rc.6 host-apiproxy only serves settings namespaces on an
+explicit hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`), so the plugin
+ships a loopback-only settings bridge (`src/settings-bridge.ts`) instead:
+when the web card binds the `openviking` namespace and the official scope
+reports it unavailable, the browser half falls back to two same-origin
+routes (`POST /api/dsh-openviking/describe` and `/mutate`) that re-serve the
+namespace through the host settings seam. The bridge rides `ctx.settings`
+(schema validation, revision fencing, persistence and events for free),
+serves only the plugin's own registered namespace, and refuses anything that
+is not a loopback same-origin POST. No harness patch, no allowlist file, no
+re-run after dsh upgrades or `dsh plugin add|remove`.

@@ -87,38 +87,6 @@ the **complete** config under `id: openviking` in your profile's
 ```
 
 
-## Visual configuration (dsh web UI)
-
-When the deployment runs the dsh browser UI (`dsh web`), the OpenViking card
-appears under **Settings → Plugins → Plugin configuration**. It edits the
-same fields as the YAML above through the user-settings seam
-(`$DSH_HOME/settings.yaml`), layered over the profile's `id: openviking`
-row:
-
-- request-facing fields (`endpoint`, `apiKey`, `account`/`user`/`agentId`,
-  `timeoutMs`, `repoContext.*`, `autoRecall.*`, auto-commit interval)
-  **apply immediately on save**;
-- `stateFile` is read at plugin start and applies on restart;
-- overridden fields show an "Overridden" badge with a "Reset to default"
-  control that clears the user-layer override and re-inherits the profile
-  row;
-- invalid values (including a non-http(s) `endpoint`) are rejected by the
-  settings seam on save instead of stored.
-
-The card is the plugin's browser half (`dsh.client` + `exports["./client"]`,
-built to `lib/client-ui.js`). The host only serves settings namespaces on an
-explicit allowlist (`WEB_SETTINGS_NAMESPACES` in the installed
-`@deepseek-ai/dsh-host-apiproxy`), so this deployment ships a profile-local
-patched copy of that package. Re-apply it with:
-
-```sh
-node scripts/patch-dsh-exposure.mjs --profile web
-```
-
-Run it after `dsh plugin --profile web add|remove` (pnpm prunes the profile
-`node_modules`), after upgrading dsh, or whenever the card disappears from
-the Plugins page.
-
 ## Create an account and API key
 
 Admin commands need the root key (for a local service, usually in

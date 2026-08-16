@@ -17,17 +17,18 @@
  * loader format (`window.__ModuleLoader__.load`) and served by the host's
  * client-module registry at `/plugins/dsh-openviking/client.js`.
  */
-import type { ClientContext, SettingsScope, SettingsScopeSnapshot } from "@deepseek-ai/dsh-client-runtime/client";
+import type { ClientContext } from "@deepseek-ai/dsh-client-runtime/client";
 // Value import emitted as a loader require(); the app shell statically
 // registers dsh-client-ui-primitives in every composition that renders the
 // plugin settings section.
 import { IconChevronDownOutline14 } from "@deepseek-ai/dsh-client-ui-primitives";
-import type { ConnectionHandle, IApiClient, SettingsPathOpView } from "@deepseek-ai/dsh-client-connection/client";
+import type { ConnectionHandle } from "@deepseek-ai/dsh-client-connection/client";
 import type { SettingsScopeBinder } from "@deepseek-ai/dsh-client-ui-settings/client";
 import type { LocaleRuntime } from "@deepseek-ai/dsh-client-locale/client";
 import type { Translate } from "@deepseek-ai/dsh-client-ui-slots";
 import type { ComponentType, ReactNode } from "react";
 import { useSyncExternalStore, useState } from "react";
+import { createCompatScope, type BridgeBatchOp, type CompatSettingsScope } from "./client-ui/compat-scope.js";
 
 // ─── slot + locale type contract ────────────────────────────────────────
 // The runtime slot table lives in the dsh web bundle; the declarations below
@@ -286,12 +287,6 @@ interface FieldView {
 }
 
 /** The card's reactive snapshot: shell state plus every field view. */
-/** The settings scope as bound, plus the load() the controller uses for read-back. */
-interface SettingsScopeWithLoad extends SettingsScope<Record<string, unknown>> {
-  /** Queue a Host refresh; a newer read or user write suppresses stale publication. */
-  load(): Promise<void>;
-}
-
 interface CardSnapshot {
   available: boolean;
   writable: boolean;
@@ -299,6 +294,8 @@ interface CardSnapshot {
   invalid: boolean;
   saving: boolean;
   failed: boolean;
+  /** Host rejection reason of the last failed save, when one was returned. */
+  failedReason?: string;
   fields: Record<string, FieldView>;
 }
 
@@ -310,18 +307,45 @@ interface CardSnapshot {
  * projection published to subscribers.
  */
 class OpenVikingCardController {
-  private readonly scope: SettingsScopeWithLoad;
-  private readonly api: Pick<IApiClient, "settings">;
+  private readonly scope: CompatSettingsScope<Record<string, unknown>>;
   private readonly staged = new Map<string, Staged>();
   private readonly listeners = new Set<() => void>();
   private snapshot: CardSnapshot;
   private saving = false;
   private failed = false;
+  private failedReason: string | undefined;
 
   constructor(ctx: ClientContext) {
     const connection = ctx.get("connection") as ConnectionHandle;
-    this.api = connection.api;
-    this.scope = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: NS }) as SettingsScopeWithLoad;
+    // Official settings scope first; the bridge fallback takes over only when
+    // the namespace is not exposed to this client on a loopback connection.
+    this.scope = createCompatScope<Record<string, unknown>>({
+      namespace: NS,
+      primary: ctx.settingsScope.bind<Record<string, unknown>>({ namespace: NS }),
+      fetchFn: connection.isLoopback ? ((input, init) => fetch(input, init)) : undefined,
+    });
+    // Bridge refreshes ride the same invalidation edges as the official
+    // scope: forwarded settings-document updates and connection resets.
+    ctx.effect(() => {
+      const disposers: Array<() => void> = [];
+      const remote = ctx.get("remote") as { $on: (event: string, callback: (namespace?: unknown) => void) => () => void } | undefined;
+      if (remote !== undefined) {
+        disposers.push(
+          remote.$on("settings/document-updated", (namespace) => {
+            if (namespace !== undefined && namespace !== NS) return;
+            void this.scope.load();
+          }),
+        );
+      }
+      disposers.push(
+        ctx.on("connection/reset", () => {
+          void this.scope.load();
+        }),
+      );
+      return () => {
+        for (const dispose of disposers) dispose();
+      };
+    }, "openviking: card scope invalidation");
     this.snapshot = this.project();
     this.scope.subscribe(() => this.publish());
   }
@@ -343,19 +367,24 @@ class OpenVikingCardController {
 
   /** Stage draft text for one text/number/password field. */
   edit(fieldKey: string, text: string): void {
-    this.staged.set(fieldKey, { kind: "text", text });
-    this.publish();
+    this.stage(fieldKey, { kind: "text", text });
   }
 
   /** Stage a checkbox value for one bool field. */
   toggle(fieldKey: string, checked: boolean): void {
-    this.staged.set(fieldKey, { kind: "bool", checked });
-    this.publish();
+    this.stage(fieldKey, { kind: "bool", checked });
   }
 
   /** Stage a clear, so saving lets the field re-inherit the composition layer. */
   resetField(fieldKey: string): void {
-    this.staged.set(fieldKey, { kind: "clear" });
+    this.stage(fieldKey, { kind: "clear" });
+  }
+
+  /** Stage one edit; any prior failure state is cleared by the new draft. */
+  private stage(fieldKey: string, staged: Staged): void {
+    this.staged.set(fieldKey, staged);
+    this.failed = false;
+    this.failedReason = undefined;
     this.publish();
   }
 
@@ -363,57 +392,78 @@ class OpenVikingCardController {
   discard(): void {
     this.staged.clear();
     this.failed = false;
+    this.failedReason = undefined;
     this.publish();
   }
 
   /** Write every staged edit, then re-seed from what the Host accepted. */
   async save(): Promise<void> {
     if (this.saving || !this.snapshot.available || !this.snapshot.writable || this.snapshot.invalid) return;
+    const writes: BridgeBatchOp[] = [];
+    const fields = new Set<string>();
+    for (const [fieldKey, staged] of this.staged) {
+      const field = FIELD_BY_KEY.get(fieldKey);
+      if (!field) continue;
+      fields.add(fieldKey);
+      if (staged.kind === "text") {
+        if (staged.text === "") writes.push({ field: fieldKey, op: "unset" });
+        else writes.push({ field: fieldKey, op: "set", value: field.kind === "number" ? Number(staged.text) : staged.text });
+      } else if (staged.kind === "clear") {
+        writes.push({ field: fieldKey, op: "unset" });
+      } else {
+        writes.push({ field: fieldKey, op: "set", value: staged.checked });
+      }
+    }
     this.saving = true;
+    this.failed = false;
+    this.failedReason = undefined;
     this.publish();
     try {
-      const ops: SettingsPathOpView[] = [];
-      for (const [fieldKey, staged] of this.staged) {
-        const field = FIELD_BY_KEY.get(fieldKey);
-        if (!field) continue;
-        if (staged.kind === "text") {
-          if (staged.text === "") {
-            ops.push({ op: "unset", path: [...field.path] });
-          } else {
-            ops.push({ op: "set", path: [...field.path], value: field.kind === "number" ? Number(staged.text) : staged.text });
-          }
-        } else if (staged.kind === "clear") {
-          ops.push({ op: "unset", path: [...field.path] });
-        } else {
-          ops.push({ op: "set", path: [...field.path], value: staged.checked });
-        }
-      }
+      const landed = new Set<string>();
       let accepted = true;
-      if (ops.length > 0) {
-        const revision = this.scope.getSnapshot().revision;
-        try {
-          const response = await this.api.settings.mutate({
-            ns: NS,
-            ops,
-            ...(revision === undefined ? {} : { expectedRevision: revision }),
-          });
-          accepted = response.result.ok;
-        } catch {
-          accepted = false;
+      let reason: string | undefined;
+      // The bridge scope batches every write into one mutate; the official
+      // scope path writes per-field. Either way the Host is the only
+      // authority on what landed — the read-back decides per field.
+      const batch = this.scope.mutate;
+      if (batch !== undefined && writes.length > 0) {
+        const result = await batch(writes);
+        accepted = result.ok;
+        reason = result.message;
+        if (result.ok) {
+          for (const field of result.fields) {
+            if (field.landed) landed.add(field.field);
+          }
+        }
+      } else {
+        for (const write of writes) {
+          if (write.op === "set") await this.scope.set(write.field, write.value);
+          else await this.scope.unset(write.field);
+          if (this.landed(write)) landed.add(write.field);
         }
       }
-      // Re-read the authoritative section: only the Host decides what landed.
       await this.scope.load();
       if (accepted) {
-        this.staged.clear();
-        this.failed = false;
+        for (const fieldKey of fields) {
+          if (landed.has(fieldKey)) this.staged.delete(fieldKey);
+        }
+        this.failed = landed.size !== fields.size;
+        this.failedReason = this.failed ? reason : undefined;
       } else {
         this.failed = true;
+        this.failedReason = reason;
       }
     } finally {
       this.saving = false;
       this.publish();
     }
+  }
+
+  /** Whether the current user layer holds (or, for unset, no longer holds) the write. */
+  private landed(write: BridgeBatchOp): boolean {
+    const user = this.scope.getSnapshot().user as Record<string, unknown> | undefined;
+    if (write.op === "unset") return user === undefined || !Object.hasOwn(user, write.field);
+    return user !== undefined && user[write.field] === write.value;
   }
 
   // ── projection ────────────────────────────────────────────────────────
@@ -455,6 +505,7 @@ class OpenVikingCardController {
       invalid,
       saving: this.saving,
       failed: this.failed,
+      ...(this.failedReason === undefined ? {} : { failedReason: this.failedReason }),
       fields,
     };
   }
@@ -663,6 +714,7 @@ function OpenVikingCard(props: OpenVikingCardProps): ReactNode {
             {state.failed ? (
               <p className="ovk_failed" role="status">
                 {t("saveFailed")}
+                {state.failedReason !== undefined && state.failedReason !== "" ? `：${state.failedReason}` : ""}
               </p>
             ) : null}
             <button

@@ -47,38 +47,23 @@ the web profile's client-module registry serves the bundle at
 
 Host exposure is the only harness-side requirement: the installed
 `@deepseek-ai/dsh-host-apiproxy` gates which settings namespaces reach the
-browser. `scripts/patch-dsh-exposure.mjs` places a patched copy (with
-`openviking` added to `WEB_SETTINGS_NAMESPACES`) in the profile's own
-`node_modules`, which the loader resolves before the installation copy.
+browser (`WEB_SETTINGS_NAMESPACES`, hard-coded in rc.6). The plugin ships a
+loopback-only settings bridge instead of patching anything:
 
-Real-service contract tests run only when explicitly enabled:
-
-```bash
-export OPENVIKING_API_KEY='...'   # injected by the test process
-OPENVIKING_INTEGRATION=1 npm test
-```
-
-The harness reads endpoint/account from `ov config show -o json`; the API key
-# Development, Testing & Distribution
-…
-## Distribution
-
-The plugin is distributed from the GitHub repository, not npm. The repo
-commits prebuilt `lib/` (compiled from `src/`), so installs via
-`dsh plugin --profile <name> add github:Rxiain/dsh-openviking` load without
-any build step or authorization.
-
-**When you change `src/`**: run `npm run build` and commit the updated `lib/`
-alongside the source — otherwise git installers get a stale build. The
-package `files` set (`lib`, `cordis.patch.yml`, READMEs, `docs/`) is only
-relevant for `npm pack`/tarball installs.
-
-## Contributing
-
-1. Fork the repository and create a feature branch.
-2. Make the change; add or update tests.
-3. Run the checks: `npm test`.
-4. Open a pull request.
-
-Keep changes focused, never commit secrets, and preserve the HTTP-only
-design unless a change is explicitly agreed upon.
+- `src/bridge-protocol.ts` — dependency-free protocol shared by both halves
+  (route prefix, wire views, error envelopes). The browser bundle imports it
+  without dragging in host runtime dependencies.
+- `src/settings-bridge.ts` — host half: `makeBridgeRoutes` registers two
+  exact routes (`/api/dsh-openviking/describe`, `/mutate`) on `ctx.webServer`
+  (mounted only when a settings service AND a web server are present, so
+  headless profiles never see it). Handlers ride `ctx.settings` with the
+  official redaction, revision fencing and validation; refusals mirror the
+  official RPC codes (`settings-not-exposed`, `settings-conflict`,
+  `settings-rejected`). `isLoopbackRequest` gates socket address + Host
+  header + origin + `sec-fetch-site`.
+- `src/client-ui/compat-scope.ts` — browser half: `createCompatScope` wraps
+  the official `ctx.settingsScope`; when it reports the namespace
+  `unavailable` on a loopback connection, a `BridgeScopeController` takes
+  over and serves the same `SettingsScope` contract from the bridge routes,
+  including an optional batch `mutate` so a card save stays atomic. Remote
+  browsers never use the bridge.
