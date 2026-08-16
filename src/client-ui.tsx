@@ -85,8 +85,16 @@ type OpenVikingDictKey =
   | "fieldMaxContentCharsHint"
   | "fieldTokenBudget"
   | "fieldTokenBudgetHint"
+  | "fieldAgentSpaces"
+  | "fieldAgentSpacesHint"
+  | "fieldRefreshSteps"
+  | "fieldRefreshStepsHint"
+  | "fieldStartupMapEveryTurns"
+  | "fieldStartupMapEveryTurnsHint"
   | "fieldCommitEnabled"
   | "fieldCommitEnabledHint"
+  | "fieldTurns"
+  | "fieldTurnsHint"
   | "fieldIntervalMinutes"
   | "fieldIntervalMinutesHint"
   | "overridden"
@@ -137,10 +145,18 @@ const en: Record<OpenVikingDictKey, string> = {
   fieldMaxContentCharsHint: "Per-memory content character cap (100–5000).",
   fieldTokenBudget: "Token budget",
   fieldTokenBudgetHint: "Injected block is capped at tokenBudget × 4 characters (100–10000).",
+  fieldAgentSpaces: "Also search agent space",
+  fieldAgentSpacesHint: "Recall cases/patterns/tools/skills memories and skill playbooks from the agent space too.",
+  fieldRefreshSteps: "Refresh every N tool steps",
+  fieldRefreshStepsHint: "Re-search mid-message every N tool steps and inject only new memories (0 disables).",
+  fieldStartupMapEveryTurns: "Refresh memory map every N user turns",
+  fieldStartupMapEveryTurnsHint: "Memory-library map: injected at session start, then refreshed every N user turns (1 = start only, 0 = never).",
   fieldCommitEnabled: "Auto-commit sessions",
   fieldCommitEnabledHint: "Periodically commit sessions with uncommitted messages.",
+  fieldTurns: "Commit after N user turns",
+  fieldTurnsHint: "Commit once N uncommitted user turns accumulate (0 disables the turn trigger).",
   fieldIntervalMinutes: "Commit interval (min)",
-  fieldIntervalMinutesHint: "Minimum minutes between automatic commits.",
+  fieldIntervalMinutesHint: "Wall-clock fallback; commits dirty sessions older than this (after the first commit).",
   overridden: "Overridden",
   reset: "Reset to default",
   readOnly: "This deployment stores settings read-only.",
@@ -190,10 +206,18 @@ const zh: Record<OpenVikingDictKey, string> = {
   fieldMaxContentCharsHint: "单条记忆内容字符上限（100–5000）。",
   fieldTokenBudget: "Token 预算",
   fieldTokenBudgetHint: "注入块上限约为 tokenBudget × 4 字符（100–10000）。",
+  fieldAgentSpaces: "同时检索 agent 空间",
+  fieldAgentSpacesHint: "同时召回 agent 空间的 cases/patterns/tools/skills 记忆与技能手册。",
+  fieldRefreshSteps: "每 N 个工具步骤刷新",
+  fieldRefreshStepsHint: "同一条消息内每 N 步重新检索一次，只注入新记忆（0 关闭）。",
+  fieldStartupMapEveryTurns: "每 N 个用户回合刷新记忆地图",
+  fieldStartupMapEveryTurnsHint: "会话启动注入一次记忆库概览，之后每 N 个用户回合刷新一次（1 = 仅启动时，0 = 关闭）。",
   fieldCommitEnabled: "自动提交会话",
   fieldCommitEnabledHint: "定期提交含未提交消息的会话。",
+  fieldTurns: "累计 N 个用户回合提交",
+  fieldTurnsHint: "未提交的用户回合达到 N 个即提交（0 关闭回合触发）。",
   fieldIntervalMinutes: "提交间隔（分钟）",
-  fieldIntervalMinutesHint: "两次自动提交之间的最少分钟数。",
+  fieldIntervalMinutesHint: "时间兜底：已提交过的会话超过该间隔仍有未提交消息也会提交。",
   overridden: "已覆盖",
   reset: "恢复默认",
   readOnly: "本部署的设置为只读。",
@@ -236,7 +260,11 @@ const FIELDS: readonly FieldDef[] = [
   { path: ["autoRecall", "scoreThreshold"], kind: "number", group: "autoRecall", labelKey: "fieldScoreThreshold", hintKey: "fieldScoreThresholdHint" },
   { path: ["autoRecall", "maxContentChars"], kind: "number", group: "autoRecall", labelKey: "fieldMaxContentChars", hintKey: "fieldMaxContentCharsHint" },
   { path: ["autoRecall", "tokenBudget"], kind: "number", group: "autoRecall", labelKey: "fieldTokenBudget", hintKey: "fieldTokenBudgetHint" },
+  { path: ["autoRecall", "agentSpaces"], kind: "bool", group: "autoRecall", labelKey: "fieldAgentSpaces", hintKey: "fieldAgentSpacesHint" },
+  { path: ["autoRecall", "refreshSteps"], kind: "number", group: "autoRecall", labelKey: "fieldRefreshSteps", hintKey: "fieldRefreshStepsHint" },
+  { path: ["autoRecall", "startupMapEveryTurns"], kind: "number", group: "autoRecall", labelKey: "fieldStartupMapEveryTurns", hintKey: "fieldStartupMapEveryTurnsHint" },
   { path: ["autoCommit", "enabled"], kind: "bool", group: "autoCommit", labelKey: "fieldCommitEnabled", hintKey: "fieldCommitEnabledHint" },
+  { path: ["autoCommit", "turns"], kind: "number", group: "autoCommit", labelKey: "fieldTurns", hintKey: "fieldTurnsHint" },
   { path: ["autoCommit", "intervalMinutes"], kind: "number", group: "autoCommit", labelKey: "fieldIntervalMinutes", hintKey: "fieldIntervalMinutesHint" },
 ];
 
