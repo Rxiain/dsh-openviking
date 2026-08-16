@@ -25,6 +25,7 @@ OpenViking retrieval, resource management, auto-recall and session memory for
 | `memremove` | Remove a resource — requires literal `confirm: true` |
 | `memqueue` | Observer queue status |
 | `memcommit` | Commit the current session and extract persistent memories |
+| `memlearn` | Deliberately capture a lesson (merge into existing memory) or mint/update a skill playbook; secret-redacted, deduplicated, injected into the current turn |
 
 Also: indexed repository context, auto recall via the context-injection
 channel, and session sync + auto
@@ -73,7 +74,7 @@ the **complete** config under `id: openviking` in your profile's
     # Auto-recall relevant memories before each model step
     autoRecall:
       enabled: true
-      # Max memories injected per step; 1–50
+      # Max memories injected per turn; 1–50
       limit: 6
       # Minimum score for filler memories; 0–1
       scoreThreshold: 0.15
@@ -81,10 +82,18 @@ the **complete** config under `id: openviking` in your profile's
       maxContentChars: 500
       # Injection budget ≈ tokenBudget × 4 chars; 100–10000
       tokenBudget: 2000
-    # Periodically commit sessions with uncommitted messages
+      # Also search the agent space (cases/patterns/tools/skills memories, skill playbooks)
+      agentSpaces: true
+      # Mid-message refresh every N tool steps; injects only new memories (0 disables)
+      refreshSteps: 10
+      # Memory map: injected at session start, then refreshed every N user turns (1 = start only, 0 = never)
+      startupMapEveryTurns: 5
+    # Auto-commit on a user-turn rhythm
     autoCommit:
       enabled: true
-      # Minimum minutes between automatic commits; at least 1
+      # Commit after N uncommitted user turns (0 disables the turn trigger)
+      turns: 3
+      # Wall-clock fallback: flush dirty sessions older than this (after the first commit)
       intervalMinutes: 10
 ```
 

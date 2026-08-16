@@ -40,6 +40,10 @@
           scoreThreshold: 0.15
           maxContentChars: 500
           tokenBudget: 2000
+          agentSpaces: true
+          refreshSteps: 10
+          startupMapEveryTurns: 5
         autoCommit:
           enabled: true
+          turns: 3
           intervalMinutes: 10

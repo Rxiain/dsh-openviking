@@ -8,7 +8,7 @@
 
 # dsh-openviking
 
-面向 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 OpenViking 检索、资源管理、自动召回与会话记忆插件
+面向 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/) 的 OpenViking 检索、资源管理、自动召回(user + agent 双空间)与会话记忆插件
 
 ## 功能
 
@@ -24,6 +24,7 @@
 | `memremove` | 删除资源——需字面量`confirm: true`                                |
 | `memqueue`  | 查看观察者队列状态                                                   |
 | `memcommit` | 提交当前会话并提取持久记忆                                           |
+| `memlearn`  | 主动沉淀经验:写/合并记忆或铸 skill playbook;脱敏+查重+即时注入当前会话 |
 
 另含：已索引仓库上下文注入、通过上下文注入通道自动召回、会话同步 + 自动提交。
 
@@ -67,10 +68,10 @@ dsh --profile <name>
       enabled: true
       # 仓库列表缓存 TTL（毫秒），范围 1000–3600000
       cacheTtlMs: 60000
-    # 每个模型步骤前自动召回相关记忆
+    # 每个用户消息自动召回一次相关记忆
     autoRecall:
       enabled: true
-      # 每步最多注入的记忆条数，范围 1–50
+      # 每回合最多注入的记忆条数，范围 1–50
       limit: 6
       # 补充记忆的最低分数，范围 0–1
       scoreThreshold: 0.15
@@ -78,10 +79,18 @@ dsh --profile <name>
       maxContentChars: 500
       # 注入预算 ≈ tokenBudget × 4 字符，范围 100–10000
       tokenBudget: 2000
-    # 定期提交含未提交消息的会话
+      # 同时检索 agent 空间的 cases/patterns/tools/skills 记忆与技能手册
+      agentSpaces: true
+      # 同一条消息内每 N 个工具步骤刷新一次，只注入新记忆（0 关闭）
+      refreshSteps: 10
+      # 记忆库概览：会话启动注入一次，之后每 N 个用户回合刷新（1 = 仅启动，0 = 关闭）
+      startupMapEveryTurns: 5
+    # 按用户回合节奏自动提交会话
     autoCommit:
       enabled: true
-      # 两次自动提交之间的最少分钟数，至少 1
+      # 未提交的用户回合达到 N 个即提交（0 关闭回合触发）
+      turns: 3
+      # 时间兜底：已提交过的会话超过该间隔仍有未提交消息也会提交
       intervalMinutes: 10
 ```
 

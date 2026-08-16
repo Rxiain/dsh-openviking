@@ -22,8 +22,12 @@ overrides go in the profile's own patch as a **complete** restatement.
 | `autoRecall.scoreThreshold` | `0.15` | Minimum score for filler memories; `0`–`1` |
 | `autoRecall.maxContentChars` | `500` | Per-memory content cap; `100`–`5000` |
 | `autoRecall.tokenBudget` | `2000` | Injection budget ≈ `tokenBudget * 4` chars; `100`–`10000` |
+| `autoRecall.agentSpaces` | `true` | Also search the agent space (`viking://agent/`) so cases/patterns/tools/skills memories and shared skill playbooks are recalled, not just user-space preferences/entities/events |
+| `autoRecall.refreshSteps` | `10` | Re-search mid-message every N tool steps and inject only memories not seen yet (`0` disables); large tasks pick up memories written mid-flight without re-searching every step |
+| `autoRecall.startupMapEveryTurns` | `5` | Memory map: injected on session start, then refreshed every N **user turns** (`1` = session start only, `0` = never); long sessions get fresh counts as memories accumulate |
 | `autoCommit.enabled` | `true` | Periodically commit sessions with uncommitted messages |
-| `autoCommit.intervalMinutes` | `10` | Minimum minutes between automatic commits; at least `1` |
+| `autoCommit.turns` | `3` | Commit after this many uncommitted **user turns** (oh-my-pi retain rhythm; `0` disables the turn trigger) |
+| `autoCommit.intervalMinutes` | `10` | Wall-clock fallback: flush sessions with uncommitted messages older than this. With `turns>0` a never-committed session still waits for the turn trigger; with `turns=0` (trigger disabled) the interval applies from the start |
 
 Invalid types and out-of-range values are **rejected at load time** by the
 config schema — the plugin never silently clamps.
@@ -51,8 +55,12 @@ A complete `id: openviking` row with an environment-bound API key:
       scoreThreshold: 0.15
       maxContentChars: 500
       tokenBudget: 2000
+      agentSpaces: true
+      refreshSteps: 10
+      startupMapEveryTurns: 5
     autoCommit:
       enabled: true
+      turns: 3
       intervalMinutes: 10
 ```
 ## Authentication and secrets
