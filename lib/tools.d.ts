@@ -11,7 +11,8 @@ import { type ToolDefinition } from "@deepseek-ai/dsh-tools";
 import type { OpenVikingClient } from "./client.js";
 import type { SessionManager } from "./session-sync.js";
 interface ToolConfig {
-    timeoutMs: number;
+    /** Per-request timeout override for the whole tool set; a thunk reads the live settings value. */
+    timeoutMs: number | (() => number);
 }
 export declare function createOpenVikingTools(ctx: Context, client: OpenVikingClient, sessionManager: SessionManager, config: ToolConfig): ToolDefinition[];
 /** Register all ten tools on `ctx.tools`. */

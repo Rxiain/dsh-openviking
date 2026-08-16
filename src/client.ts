@@ -64,20 +64,44 @@ const JSON_HEADERS: Readonly<Record<string, string>> = {
 };
 
 export class OpenVikingClient {
-  readonly endpoint: string;
-  private readonly apiKey: string;
-  private readonly account: string;
-  private readonly user: string;
-  private readonly agentId: string;
-  private readonly timeoutMs: number;
+  private options: OpenVikingClientOptions;
 
   constructor(options: OpenVikingClientOptions) {
-    this.endpoint = options.endpoint.trim().replace(/\/+$/, "");
-    this.apiKey = options.apiKey ?? "";
-    this.account = options.account ?? "";
-    this.user = options.user ?? "";
-    this.agentId = options.agentId ?? "";
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.options = options;
+  }
+
+  /** Normalized service base URL of the CURRENT options (live after reconfigure). */
+  get endpoint(): string {
+    return this.options.endpoint.trim().replace(/\/+$/, "");
+  }
+
+  private get apiKey(): string {
+    return this.options.apiKey ?? "";
+  }
+
+  private get account(): string {
+    return this.options.account ?? "";
+  }
+
+  private get user(): string {
+    return this.options.user ?? "";
+  }
+
+  private get agentId(): string {
+    return this.options.agentId ?? "";
+  }
+
+  private get timeoutMs(): number {
+    return this.options.timeoutMs ?? 30_000;
+  }
+
+  /**
+   * Swap the request-facing options (endpoint, headers, timeout). Called when
+   * the settings section commits a change; subsequent requests use the new
+   * values while the instance identity stays stable.
+   */
+  reconfigure(options: OpenVikingClientOptions): void {
+    this.options = options;
   }
 
   /** The non-secret identity headers sent on every request. */

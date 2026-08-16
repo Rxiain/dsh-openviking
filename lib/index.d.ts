@@ -6,6 +6,12 @@
  * an embedded server), registers ten structured tools, injects the indexed
  * repository list and relevant memories during normal conversation, mirrors
  * user/assistant text into an OpenViking session and auto-commits it.
+ *
+ * Configuration is exposed through the user-settings seam (`ctx.settings`,
+ * namespace `openviking`): the dsh web UI's Plugins → Plugin configuration
+ * page edits the same schema this file validates, layered over the profile's
+ * composed entry config. Request-facing fields (endpoint, headers, timeouts)
+ * apply live; the session state file is read at boot.
  */
 import z from "@deepseek-ai/schemastery";
 import type { Context } from "@deepseek-ai/cordis";
@@ -13,6 +19,8 @@ import type { Context } from "@deepseek-ai/cordis";
 export declare const name = "openviking";
 /** Services required by this plugin. `agents` guarantees the registry is ready and lets us adopt live agents. */
 export declare const inject: string[];
+/** User-settings namespace carrying this plugin's configuration. */
+export declare const SETTINGS_NAMESPACE: import("@deepseek-ai/dsh-settings").SettingsNamespace;
 export interface RepoContextConfig {
     /** Inject the indexed-repository list into the system prompt. */
     enabled: boolean;

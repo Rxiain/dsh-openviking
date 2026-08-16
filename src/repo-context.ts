@@ -23,7 +23,13 @@ export interface RepoContext {
   getPrompt(): string;
 }
 
-export function createRepoContext(ctx: Context, client: OpenVikingClient, config: RepoContextConfig): RepoContext {
+export function createRepoContext(
+  ctx: Context,
+  client: OpenVikingClient,
+  config: RepoContextConfig | (() => RepoContextConfig),
+): RepoContext {
+  // Accept a plain object (tests, direct callers) or a thunk (live settings).
+  const getConfig = typeof config === "function" ? config : () => config;
   const logger = ctx.logger("openviking:repo-context");
   const warningKeys = new Set<string>();
   let cachedRepos: string | undefined;
@@ -31,6 +37,7 @@ export function createRepoContext(ctx: Context, client: OpenVikingClient, config
   let inflight: Promise<string | undefined> | undefined;
 
   async function refresh(options: { force?: boolean; signal?: AbortSignal } = {}): Promise<string | undefined> {
+    const config = getConfig();
     if (!config.enabled) return undefined;
     const now = Date.now();
     if (!options.force && cachedRepos !== undefined && now - lastFetchTime < config.cacheTtlMs) {
@@ -78,7 +85,7 @@ export function createRepoContext(ctx: Context, client: OpenVikingClient, config
   }
 
   function getPrompt(): string {
-    if (!config.enabled || !cachedRepos) return "";
+    if (!getConfig().enabled || !cachedRepos) return "";
     return [
       "## OpenViking - Indexed Code Repositories",
       "",

@@ -33,13 +33,21 @@ export interface RequestOptions {
     timeoutMs?: number;
 }
 export declare class OpenVikingClient {
-    readonly endpoint: string;
-    private readonly apiKey;
-    private readonly account;
-    private readonly user;
-    private readonly agentId;
-    private readonly timeoutMs;
+    private options;
     constructor(options: OpenVikingClientOptions);
+    /** Normalized service base URL of the CURRENT options (live after reconfigure). */
+    get endpoint(): string;
+    private get apiKey();
+    private get account();
+    private get user();
+    private get agentId();
+    private get timeoutMs();
+    /**
+     * Swap the request-facing options (endpoint, headers, timeout). Called when
+     * the settings section commits a change; subsequent requests use the new
+     * values while the instance identity stays stable.
+     */
+    reconfigure(options: OpenVikingClientOptions): void;
     /** The non-secret identity headers sent on every request. */
     buildHeaders(): Record<string, string>;
     /**

@@ -1,27 +1,25 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "lib": [
-      "ES2022"
+      "ES2022",
+      "DOM"
     ],
+    "jsx": "react-jsx",
     "strict": true,
     "declaration": true,
     "outDir": "lib",
     "rootDir": "src",
-    "types": [
-      "node"
-    ],
+    "types": [],
     "skipLibCheck": true,
-    "verbatimModuleSyntax": true,
+    "verbatimModuleSyntax": false,
     "noUncheckedIndexedAccess": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "emitDeclarationOnly": true
   },
   "include": [
-    "src"
-  ],
-  "exclude": [
     "src/client-ui.tsx"
   ]
 }

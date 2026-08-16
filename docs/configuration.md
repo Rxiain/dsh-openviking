@@ -83,3 +83,40 @@ There is no plugin-level `enabled` field. Disable the Cordis row:
 - id: openviking
   disabled: true
 ```
+
+
+## Visual configuration in the dsh web UI
+
+When the deployment runs the dsh browser UI (`dsh web`), the OpenViking
+settings card appears under **设置 → 插件 → 插件配置**. It edits the same
+fields as this document through the user-settings seam (`settings.yaml` at
+`$DSH_HOME`), layered over the profile's `id: openviking` row:
+
+- **schema defaults → profile row (composition base) → user document** —
+  fields saved in the UI land in `settings.yaml`; fields not saved there
+  keep the profile row's value. A field the user layer carries shows an
+  "已覆盖 / Overridden" badge with a "恢复默认 / Reset to default" control
+  that clears the override (the field re-inherits the profile row).
+- **live fields** — `endpoint`, `apiKey`, `account`, `user`, `agentId`,
+  `timeoutMs`, `repoContext.*`, `autoRecall.*` and the auto-commit schedule
+  apply immediately on save (the plugin re-reads them per request/step).
+- **boot fields** — `stateFile` is read once at plugin start; changing it
+  takes effect on the next restart.
+- **validation** — the schema ranges above are enforced on save; a
+  malformed `endpoint` is refused by the settings seam instead of stored.
+
+The card is the plugin's browser half (`dsh.client` + `exports["./client"]`,
+built to `lib/client-ui.js`); the host serves it at
+`/plugins/dsh-openviking/client.js` in the web profile. The card needs no
+harness bundle changes, but the host only serves settings namespaces on an
+explicit allowlist (`WEB_SETTINGS_NAMESPACES` in the installed
+`@deepseek-ai/dsh-host-apiproxy`), so this deployment ships a profile-local
+patched copy of that package. Re-apply it with:
+
+```bash
+node scripts/patch-dsh-exposure.mjs --profile web
+```
+
+Run it after `dsh plugin --profile web add|remove` (pnpm prunes the profile
+`node_modules`), after upgrading dsh, or whenever the card disappears from
+the Plugins page.

@@ -6,13 +6,20 @@
  * an embedded server), registers ten structured tools, injects the indexed
  * repository list and relevant memories during normal conversation, mirrors
  * user/assistant text into an OpenViking session and auto-commits it.
+ *
+ * Configuration is exposed through the user-settings seam (`ctx.settings`,
+ * namespace `openviking`): the dsh web UI's Plugins → Plugin configuration
+ * page edits the same schema this file validates, layered over the profile's
+ * composed entry config. Request-facing fields (endpoint, headers, timeouts)
+ * apply live; the session state file is read at boot.
  */
 import z from "@deepseek-ai/schemastery";
 import type { Context } from "@deepseek-ai/cordis";
+import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { OpenVikingClient } from "./client.js";
 import { createMemoryRecall } from "./memory-recall.js";
 import { createRepoContext } from "./repo-context.js";
-import { SessionManager } from "./session-sync.js";
+import { SessionManager, type SessionSyncConfig } from "./session-sync.js";
 import { registerOpenVikingTools } from "./tools.js";
 
 /** Cordis plugin name used by loader diagnostics. */
@@ -20,6 +27,9 @@ export const name = "openviking";
 
 /** Services required by this plugin. `agents` guarantees the registry is ready and lets us adopt live agents. */
 export const inject = ["tools", "fs", "systemPrompt", "agents"];
+
+/** User-settings namespace carrying this plugin's configuration. */
+export const SETTINGS_NAMESPACE = settingsNamespace("openviking");
 
 export interface RepoContextConfig {
   /** Inject the indexed-repository list into the system prompt. */
@@ -105,7 +115,9 @@ export const Config = z.object({
 /**
  * Reject an invalid endpoint at load time: it must be a non-empty absolute
  * http(s) URL. Throws a clear error before the client is constructed so a
- * misconfigured profile fails fast instead of misbehaving at runtime.
+ * misconfigured profile fails fast instead of misbehaving at runtime. Also
+ * used as the settings-section validator, so a UI save of a malformed
+ * endpoint is refused by the seam instead of stored.
  */
 function assertValidEndpoint(endpoint: string): void {
   let url: URL;
@@ -119,24 +131,9 @@ function assertValidEndpoint(endpoint: string): void {
   }
 }
 
-/**
- * Mount the plugin. The service may be unreachable: the plugin still loads,
- * normal conversation continues, and automatic layers skip with deduplicated
- * warnings while explicit tool calls throw clear errors.
- */
-export function apply(ctx: Context, config: Config): void {
-  assertValidEndpoint(config.endpoint);
-  const client = new OpenVikingClient({
-    endpoint: config.endpoint,
-    apiKey: config.apiKey,
-    account: config.account,
-    user: config.user,
-    agentId: config.agentId,
-    timeoutMs: config.timeoutMs,
-  });
-  const logger = ctx.logger("openviking");
-
-  const sessionManager = new SessionManager(ctx, client, {
+/** Project the full plugin config onto the SessionManager's config slice. */
+function sessionSyncConfigOf(config: Config): SessionSyncConfig {
+  return {
     endpoint: config.endpoint,
     apiKey: config.apiKey,
     account: config.account,
@@ -145,9 +142,60 @@ export function apply(ctx: Context, config: Config): void {
     timeoutMs: config.timeoutMs,
     stateFile: config.stateFile,
     autoCommit: config.autoCommit,
+  };
+}
+
+/**
+ * Mount the plugin. The service may be unreachable: the plugin still loads,
+ * normal conversation continues, and automatic layers skip with deduplicated
+ * warnings while explicit tool calls throw clear errors.
+ */
+export function apply(ctx: Context, config: Config): void {
+  assertValidEndpoint(config.endpoint);
+  const logger = ctx.logger("openviking");
+
+  // The authoritative configuration source. While a settings service is
+  // mounted, `installSettingsSection` points it at the resolved settings
+  // scope (schema defaults → composed entry config → user document); without
+  // one it stays on the composition entry, so every deployment behaves
+  // exactly as composed. Subsystems read through `current()` so a committed
+  // settings change can be applied live.
+  let current: () => Config = () => config;
+
+  const client = new OpenVikingClient({
+    endpoint: config.endpoint,
+    apiKey: config.apiKey,
+    account: config.account,
+    user: config.user,
+    agentId: config.agentId,
+    timeoutMs: config.timeoutMs,
   });
-  const repoContext = createRepoContext(ctx, client, config.repoContext);
-  const recall = createMemoryRecall(ctx, client, config.autoRecall);
+  const sessionManager = new SessionManager(ctx, client, sessionSyncConfigOf(config));
+  const repoContext = createRepoContext(ctx, client, () => current().repoContext);
+  const recall = createMemoryRecall(ctx, client, () => current().autoRecall);
+
+  // Optional-settings consumer wiring: register the `openviking` namespace
+  // with this entry as its base layer. No-op when no settings service is
+  // mounted (tests, minimal compositions). `validate` refuses a save whose
+  // resolved endpoint is not an absolute http(s) URL at the seam boundary.
+  installSettingsSection(ctx, SETTINGS_NAMESPACE, Config, config, {
+    setSource: (next) => {
+      current = next;
+    },
+    onChange: () => {
+      const cfg = current();
+      client.reconfigure({
+        endpoint: cfg.endpoint,
+        apiKey: cfg.apiKey,
+        account: cfg.account,
+        user: cfg.user,
+        agentId: cfg.agentId,
+        timeoutMs: cfg.timeoutMs,
+      });
+      sessionManager.reconfigure(sessionSyncConfigOf(cfg));
+    },
+    validate: (value) => assertValidEndpoint(value.endpoint),
+  });
 
   // One effect owns the manager lifecycle: init (state load + adoption +
   // auto-commit timer) and the disposer (closing, timer teardown, background
@@ -160,7 +208,7 @@ export function apply(ctx: Context, config: Config): void {
     };
   }, "openviking:lifecycle");
 
-  registerOpenVikingTools(ctx, client, sessionManager, { timeoutMs: config.timeoutMs });
+  registerOpenVikingTools(ctx, client, sessionManager, { timeoutMs: () => current().timeoutMs });
 
   // Synchronous providers: read the per-agent slots only, never perform I/O
   // during prompt assembly. Empty text contributes nothing.
@@ -223,5 +271,5 @@ export function apply(ctx: Context, config: Config): void {
     sessionManager.queueDrain(agent);
   });
 
-  logger.info("openviking plugin mounted", { endpoint: client.endpoint, stateFile: config.stateFile });
+  logger.info("openviking plugin mounted", { endpoint: client.endpoint, stateFile: current().stateFile });
 }

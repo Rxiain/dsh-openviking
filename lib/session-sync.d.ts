@@ -33,7 +33,7 @@ export declare function stripRecallBlock(text: string): string;
 export declare class SessionManager {
     private readonly ctx;
     private readonly client;
-    private readonly config;
+    private config;
     private readonly statePath;
     private readonly agents;
     private readonly states;
@@ -60,6 +60,14 @@ export declare class SessionManager {
     constructor(ctx: Context, client: OpenVikingClient, config: SessionSyncConfig);
     /** Load state, adopt already-registered agents, and start the auto-commit timer. */
     init(): Promise<void>;
+    /**
+     * Swap the live configuration slice after a settings change. The state file
+     * path is deliberately NOT re-read (it is fixed at construction); identity
+     * and the auto-commit schedule follow the new config. The auto-commit timer
+     * is restarted only when `autoCommit.enabled` flipped, so a running timer
+     * keeps its phase and a disabled one stays off.
+     */
+    reconfigure(config: SessionSyncConfig): void;
     /**
      * Idempotently register a live agent and queue ensure+drain. Public adopts
      * are gated behind init() so an `agent/created` event arriving before the

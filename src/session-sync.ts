@@ -168,7 +168,7 @@ export function stripRecallBlock(text: string): string {
 export class SessionManager {
   private readonly ctx: Context;
   private readonly client: OpenVikingClient;
-  private readonly config: SessionSyncConfig;
+  private config: SessionSyncConfig;
   private readonly statePath: string;
   private readonly agents = new Map<string, Agent>();
   private readonly states = new Map<string, SessionState>();
@@ -211,6 +211,24 @@ export class SessionManager {
     } finally {
       this.initDone = true;
       this.readyResolve();
+    }
+  }
+
+  /**
+   * Swap the live configuration slice after a settings change. The state file
+   * path is deliberately NOT re-read (it is fixed at construction); identity
+   * and the auto-commit schedule follow the new config. The auto-commit timer
+   * is restarted only when `autoCommit.enabled` flipped, so a running timer
+   * keeps its phase and a disabled one stays off.
+   */
+  reconfigure(config: SessionSyncConfig): void {
+    this.config = config;
+    if (!this.initDone) return;
+    if (this.config.autoCommit.enabled && !this.autoCommitTimer) {
+      this.startAutoCommit();
+    } else if (!this.config.autoCommit.enabled && this.autoCommitTimer) {
+      clearInterval(this.autoCommitTimer);
+      this.autoCommitTimer = undefined;
     }
   }
 

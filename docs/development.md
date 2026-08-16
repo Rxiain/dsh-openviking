@@ -15,6 +15,42 @@ TTL, recall ranking/budget, session drain ordering/retry, state restore),
 and a full Cordis lifecycle harness (real Context spine + fake OpenViking
 server: adoption, pre-step injection, dispose revocation, remount).
 
+The settings suite (`test/settings.test.mjs`) additionally mounts a real
+in-memory settings provider and verifies the `openviking` namespace
+registration, layered resolution over the composition entry, live
+reconfiguration of request-facing fields, seam-side endpoint validation, and
+the browser-half artifact (loader format + canonical `apply`/`inject`).
+
+## Browser half (web UI settings card)
+
+`src/client-ui.tsx` is the plugin's browser half: it registers the OpenViking
+card into the dsh web UI's Plugins → Plugin configuration section
+(`settings.plugin.item` slot), binds the `openviking` settings namespace via
+`ctx.settingsScope`, stages edits, and writes them with revision-fenced
+`settings.mutate` path ops. It is built separately because the browser needs
+the dsh loader bundle format, not plain ESM:
+
+```bash
+npm run build
+# 1. tsc -p tsconfig.json            → host lib/*.js (ESM)
+# 2. tsc -p tsconfig.client.json     → lib/client-ui.d.ts (types, no JS)
+# 3. node scripts/build-client.mjs   → lib/client-ui.js (esbuild CJS +
+#                                      window.__ModuleLoader__.load wrapper)
+```
+
+The bundle keeps `react`, `react/jsx-runtime` and
+`@deepseek-ai/dsh-client-ui-primitives` external; the browser loader
+resolves them from its module table. `package.json` declares
+`dsh.client` (`platform: "web"`, inject edges) and `exports["./client"]`, so
+the web profile's client-module registry serves the bundle at
+`/plugins/dsh-openviking/client.js` and the boot manifest loads it.
+
+Host exposure is the only harness-side requirement: the installed
+`@deepseek-ai/dsh-host-apiproxy` gates which settings namespaces reach the
+browser. `scripts/patch-dsh-exposure.mjs` places a patched copy (with
+`openviking` added to `WEB_SETTINGS_NAMESPACES`) in the profile's own
+`node_modules`, which the loader resolves before the installation copy.
+
 Real-service contract tests run only when explicitly enabled:
 
 ```bash

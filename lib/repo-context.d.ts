@@ -22,4 +22,4 @@ export interface RepoContext {
     /** Synchronous prompt text; "" when disabled, empty, or never populated. */
     getPrompt(): string;
 }
-export declare function createRepoContext(ctx: Context, client: OpenVikingClient, config: RepoContextConfig): RepoContext;
+export declare function createRepoContext(ctx: Context, client: OpenVikingClient, config: RepoContextConfig | (() => RepoContextConfig)): RepoContext;

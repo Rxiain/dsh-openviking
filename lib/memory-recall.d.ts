@@ -32,6 +32,6 @@ export interface MemoryRecall {
     /** Synchronous read of the stored block ("" when nothing applies). */
     takeBlock(agentKey: string): string;
 }
-export declare function createMemoryRecall(ctx: Context, client: OpenVikingClient, config: AutoRecallConfig): MemoryRecall;
+export declare function createMemoryRecall(ctx: Context, client: OpenVikingClient, config: AutoRecallConfig | (() => AutoRecallConfig)): MemoryRecall;
 /** Latest user text from the message list; undefined when absent or already injected. */
 export declare function extractLatestUserText(messages: readonly UserMessage[]): string | undefined;

@@ -180,7 +180,8 @@ function asSearchFileMatches(value: unknown): SearchFileMatches[] {
 }
 
 interface ToolConfig {
-  timeoutMs: number;
+  /** Per-request timeout override for the whole tool set; a thunk reads the live settings value. */
+  timeoutMs: number | (() => number);
 }
 
 // ─── tool factories ─────────────────────────────────────────────────────
@@ -503,7 +504,8 @@ export function createOpenVikingTools(
         tempFileId = await uploadLocalFile(ctx, client, args.path, exec);
       }
 
-      const waitTimeoutMs = args.wait ? Math.max(config.timeoutMs, (args.timeout ?? 300) * 1000) : undefined;
+      const baseTimeoutMs = typeof config.timeoutMs === "function" ? config.timeoutMs() : config.timeoutMs;
+      const waitTimeoutMs = args.wait ? Math.max(baseTimeoutMs, (args.timeout ?? 300) * 1000) : undefined;
       const addResult = await client.addResource({
         tempFileId,
         path: source === "remote" ? args.path : undefined,

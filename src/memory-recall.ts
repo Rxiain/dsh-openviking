@@ -81,7 +81,13 @@ interface RecallCacheEntry {
   timestamp: number;
 }
 
-export function createMemoryRecall(ctx: Context, client: OpenVikingClient, config: AutoRecallConfig): MemoryRecall {
+export function createMemoryRecall(
+  ctx: Context,
+  client: OpenVikingClient,
+  config: AutoRecallConfig | (() => AutoRecallConfig),
+): MemoryRecall {
+  // Accept a plain object (tests, direct callers) or a thunk (live settings).
+  const getConfig = typeof config === "function" ? config : () => config;
   const logger = ctx.logger("openviking:memory-recall");
   // Per-agent one-shot slot for the current step's block.
   const blocks = new Map<string, string>();
@@ -110,6 +116,7 @@ export function createMemoryRecall(ctx: Context, client: OpenVikingClient, confi
 
   async function prepareStep(agentKey: string, messages: UserMessage[], signal?: AbortSignal): Promise<void> {
     // Clear first: a block only lives for the step that computed it.
+    const config = getConfig();
     blocks.set(agentKey, "");
     if (!config.enabled) return;
 
