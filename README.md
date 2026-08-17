@@ -12,23 +12,33 @@
 
 ## 功能
 
-| 工具          | 功能                                                                 |
-| ------------- | -------------------------------------------------------------------- |
-| `memsearch` | 语义搜索（`auto`/`fast`/`deep`；deep 使用会话上下文）          |
-| `memfind`   | 快速语义查找，不带会话上下文                                         |
-| `memread`   | 读取`viking://` URI（`abstract`/`overview`/`read`/`auto`） |
-| `membrowse` | 浏览`viking://` 文件系统（`list`/`tree`/`stat`）             |
-| `memgrep`   | 精确/正则内容搜索（默认`viking://resources/`）                     |
-| `memglob`   | 按 glob 模式枚举文件                                                 |
-| `memadd`    | 在`viking://resources/` 下添加远程 URL 或本地文本文件              |
-| `memremove` | 删除资源——需字面量`confirm: true`                                |
-| `memqueue`  | 查看观察者队列状态                                                   |
-| `memcommit` | 提交当前会话并提取持久记忆                                           |
+| 工具          | 功能                                                                   |
+| ------------- | ---------------------------------------------------------------------- |
+| `memsearch` | 语义搜索（`auto`/`fast`/`deep`；deep 使用会话上下文）            |
+| `memfind`   | 快速语义查找，不带会话上下文                                           |
+| `memread`   | 读取`viking://` URI（`abstract`/`overview`/`read`/`auto`）   |
+| `membrowse` | 浏览`viking://` 文件系统（`list`/`tree`/`stat`）               |
+| `memgrep`   | 精确/正则内容搜索（默认`viking://resources/`）                       |
+| `memglob`   | 按 glob 模式枚举文件                                                   |
+| `memadd`    | 在`viking://resources/` 下添加远程 URL 或本地文本文件                |
+| `memremove` | 删除资源——需字面量`confirm: true`                                  |
+| `memqueue`  | 查看观察者队列状态                                                     |
+| `memcommit` | 提交当前会话并提取持久记忆                                             |
 | `memlearn`  | 主动沉淀经验:写/合并记忆或铸 skill playbook;脱敏+查重+即时注入当前会话 |
 
 另含：已索引仓库上下文注入、通过上下文注入通道自动召回、会话同步 + 自动提交。
 
 ![记忆检索调用示例](docs/screenshot-memory-recall.png)
+
+## 为什么选择 OpenViking？
+
+| 维度       | 本地文件 / SQLite 方案     | OpenViking 方案（本插件）                                                                                    |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 召回       | 关键词 / FTS5 精确匹配     | 语义检索：向量召回 + L0/L1 摘要层定位                                                                        |
+| 内容形态   | 只能存自己写进去的文本     | 记忆、资源、技能统一在一个`viking://` 虚拟文件系统里；远程 URL、本地文档都能 `memadd` 入库成为可检索资源 |
+| 上下文开销 | 全量注入或手写精简         | L0 摘要（一句话）→ L1 概览（要点）→ L2 全文三层分级，**按需加载**，省 token                          |
+| 跨工具     | 每个工具一套记忆，彼此孤岛 | **同一套记忆跨工具共享**：Claude Code、Codex、MCP 客户端、ov CLI 与 DSH 读写同一个库                   |
+| 维护       | 靠手工整理                 | 观察者队列自动完成嵌入、摘要生成与内容重组（`memqueue` 可查状态）                                          |
 
 ## 快速开始
 

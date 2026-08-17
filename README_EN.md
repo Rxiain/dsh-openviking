@@ -8,7 +8,8 @@
 
 # dsh-openviking
 
-OpenViking retrieval, resource management, auto-recall and session memory for
+OpenViking retrieval, resource management, auto-recall (user + agent dual
+spaces) and session memory for
 [DeepSeek Harness](https://deepseek-harness.github.io/deepseek-harness/).
 
 ## Features
@@ -32,6 +33,16 @@ channel, and session sync + auto
 commit.
 
 ![Memory retrieval in action](docs/screenshot-memory-recall.png)
+
+## Why OpenViking?
+
+| Dimension | Local file / SQLite approach | OpenViking approach (this plugin) |
+| --- | --- | --- |
+| Recall | Keyword / FTS5 exact matching | Semantic retrieval: vector recall + L0/L1 abstract-layer targeting |
+| Content forms | Only text you write yourself | Memories, resources and skills in one `viking://` virtual filesystem; remote URLs and local files can be `memadd`-ed into the library as searchable resources |
+| Context cost | Full-context injection or hand-trimmed summaries | Three tiers — L0 abstract (one sentence) → L1 overview (key points) → L2 full text — **loaded on demand**, saving tokens |
+| Cross-tool | One memory silo per tool | **One shared memory across tools**: Claude Code, Codex, MCP clients, the `ov` CLI and DSH all read/write the same library |
+| Maintenance | Manual curation | An observer queue does embedding, summarization and content reorganization automatically (`memqueue` shows the status) |
 
 ## Quick start
 
