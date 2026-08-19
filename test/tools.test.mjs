@@ -43,7 +43,7 @@ function byName(tools, name) {
   return tool;
 }
 
-test("registers exactly the eleven canonical tool names, no meadd alias", () => {
+test("base tool registration stays capability-safe without userQuestions", () => {
   const { tools } = makeTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
@@ -61,6 +61,7 @@ test("registers exactly the eleven canonical tool names, no meadd alias", () => 
   ]);
   assert.ok(!tools.some((t) => t.name === "meadd"));
 });
+
 
 test("memfind maps defaults and optional fields to the canonical search request", async () => {
   const { client, calls } = stubClient();

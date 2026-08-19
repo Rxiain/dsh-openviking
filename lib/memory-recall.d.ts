@@ -72,6 +72,7 @@ export interface MemoryRecall {
      */
     forget(agentKey: string): void;
 }
+export declare function hasProcedureIntent(query: string): boolean;
 export declare function createMemoryRecall(ctx: Context, client: OpenVikingClient, config: AutoRecallConfig | (() => AutoRecallConfig)): MemoryRecall;
 /** Latest user text from the message list; undefined when absent or already injected. */
 export declare function extractLatestUserText(messages: readonly UserMessage[]): string | undefined;

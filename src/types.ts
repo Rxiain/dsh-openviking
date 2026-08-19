@@ -195,6 +195,7 @@ export interface HealthIdentity {
   role?: string;
 }
 
+
 /**
  * The normalized OpenViking error this plugin surfaces to tools and logs.
  * `code`/`message` come from the service wrapper; `status` is the HTTP status.

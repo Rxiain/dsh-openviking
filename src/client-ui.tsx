@@ -8,10 +8,10 @@
  * the profile's composition layer owns show an "Overridden" badge and a
  * reset control that clears the user-layer entry; number fields validate
  * before a save is offered. The card is registered into the
- * `settings.plugin.item` list slot declared by
- * `@deepseek-ai/dsh-client-ui-settings-plugins`, so it appears wherever that
- * section ships — no change to the harness bundle is required beyond the
- * host-side namespace exposure.
+ * `settings.plugin.item` keyed slot declared by
+ * `@deepseek-ai/dsh-client-ui-settings-plugins` (key = the `openviking`
+ * settings namespace), so it appears wherever that section ships — no change
+ * to the harness bundle is required beyond the host-side namespace exposure.
  *
  * The bundle is built by `scripts/build-client.mjs` into the dsh browser
  * loader format (`window.__ModuleLoader__.load`) and served by the host's
@@ -26,24 +26,23 @@ import type { ConnectionHandle } from "@deepseek-ai/dsh-client-connection/client
 import type { SettingsScopeBinder } from "@deepseek-ai/dsh-client-ui-settings/client";
 import type { LocaleRuntime } from "@deepseek-ai/dsh-client-locale/client";
 import type { Translate } from "@deepseek-ai/dsh-client-ui-slots";
+// Type-only import that fixes the runtime SlotMap contract into the compile:
+// dsh-client-ui-settings-plugins owns the `settings.plugin.item` slot (keyed by
+// the settings namespace it edits), so pulling its types makes `register` accept
+// `key` and reject a bare `id` — matching the rc.7 client slot runtime.
+import type { SettingsPluginItemOwnerProps } from "@deepseek-ai/dsh-client-ui-settings-plugins/client";
 import type { ComponentType, ReactNode } from "react";
 import { useSyncExternalStore, useState } from "react";
 import { createCompatScope, type BridgeBatchOp, type CompatSettingsScope } from "./client-ui/compat-scope.js";
 
 // ─── slot + locale type contract ────────────────────────────────────────
-// The runtime slot table lives in the dsh web bundle; the declarations below
-// mirror the ones the harness ships so this package can type its own
-// contribution without depending on the settings-plugins package.
+// The `settings.plugin.item` slot is keyed by the settings namespace each
+// card edits and is declared by @deepseek-ai/dsh-client-ui-settings-plugins
+// (imported above so its SlotMap contract type-checks the `key` option). The
+// card registers under `key: "openviking"`. This augmentation only adds this
+// card's own locale dictionary namespace.
 
 declare module "@deepseek-ai/dsh-client-ui-slots" {
-  interface SlotMap {
-    /** One plugin card inside the plugin configuration section. */
-    "settings.plugin.item": {
-      kind: "list";
-      scope: "root";
-      owner: Record<string, never>;
-    };
-  }
   interface LocaleNamespaceMap {
     /** Dictionary namespace owned by this card. */
     openviking: OpenVikingDictKey;
@@ -788,8 +787,7 @@ export function apply(ctx: ClientContext): void {
     ctx.slots.register(
       {
         name: "settings.plugin.item",
-        id: "openviking",
-        order: 30,
+        key: "openviking",
         locale: "openviking" as const,
         inject: () => ({ controller }),
       },

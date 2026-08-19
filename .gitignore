@@ -1,2 +1,17 @@
 node_modules/
 banks/
+
+# Tool/agent 本地状态目录（. 开头）
+.agents/
+.claude/
+.codex/
+.dsh_better_edit/
+.learnings/
+.omp/
+.opencode/
+.pi/
+
+# Local workflow-generated documentation and planning artifacts
+docs/aegis/
+docs/superpowers/
+openspec/

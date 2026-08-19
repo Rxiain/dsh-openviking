@@ -3,9 +3,9 @@
  * session memory for DeepSeek Harness.
  *
  * The plugin talks to an existing OpenViking HTTP service (never `ov` CLI, never
- * an embedded server), registers ten structured tools, injects the indexed
- * repository list and relevant memories during normal conversation, mirrors
- * user/assistant text into an OpenViking session and auto-commits it.
+ * an embedded server), registers the structured tools, injects the indexed
+ * repository list and user/assistant text into an OpenViking session, and
+ * auto-commits it.
  *
  * Configuration is exposed through the user-settings seam (`ctx.settings`,
  * namespace `openviking`): the dsh web UI's Plugins → Plugin configuration

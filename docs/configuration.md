@@ -29,6 +29,13 @@ overrides go in the profile's own patch as a **complete** restatement.
 | `autoCommit.turns` | `3` | Commit after this many uncommitted **user turns** (oh-my-pi retain rhythm; `0` disables the turn trigger) |
 | `autoCommit.intervalMinutes` | `10` | Wall-clock fallback: flush sessions with uncommitted messages older than this. With `turns>0` a never-committed session still waits for the turn trigger; with `turns=0` (trigger disabled) the interval applies from the start |
 
+Procedure-intent recall (see [`docs/tools.md`](docs/tools.md)) reuses the
+`scoreThreshold` / `maxContentChars` / `tokenBudget` / `limit` knobs above
+and applies fixed, non-configurable bounds: tree discovery keeps at most 16
+procedure-bearing branches with a 5-minute cache TTL, and each branch search
+has a 3-second deadline. There are no additional `autoRecall.*` fields for
+the procedure lane.
+
 Invalid types and out-of-range values are **rejected at load time** by the
 config schema — the plugin never silently clamps.
 

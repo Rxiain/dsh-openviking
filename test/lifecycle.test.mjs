@@ -266,15 +266,11 @@ test("pre-step recall reaches the model context channel and emits nothing withou
   ];
   const decision = await ctx.waterfall("agent/pre-step", { agent: recallAgent, messages, turn: 1, step: 1, signal: new AbortController().signal }, async () => ({ kind: "enter", messages }));
   assert.equal(decision.kind, "enter");
-  assert.equal(decision.messages, messages, "user messages are never modified");
-
-  // The recalled memories surface through the system-prompt context provider,
-  // i.e. the same channel the UI labels "上下文注入".
-  const assembly = await ctx.systemPrompt.assemble({ agent: recallAgent, scope: recallAgent, signal: new AbortController().signal });
-  const memories = assembly.contexts.find((c) => c.name === "openviking:memories");
-  assert.ok(memories, "memories context contributed");
-  assert.match(memories.text, /<relevant-memories>/);
-  assert.match(memories.text, /prefers dark mode/);
+  assert.equal(decision.messages[0], messages[0], "original user message is preserved");
+  const recalled = decision.messages.find((message) => message.source.kind === "plugin");
+  assert.ok(recalled, "recalled memories are appended as plugin context");
+  assert.match(recalled.content[0].text, /<relevant-memories>/);
+  assert.match(recalled.content[0].text, /prefers dark mode/);
 
   // Recall search scoped to user memories only.
   const recallCalls = server.requests.filter((r) => r.url === "/api/v1/search/find" && r.json.target_uri === "viking://user/memories/");
@@ -292,11 +288,28 @@ test("pre-step recall reaches the model context channel and emits nothing withou
     },
   ];
   const noopDecision = await ctx.waterfall("agent/pre-step", { agent: noopAgent, messages: noopMessages, turn: 1, step: 1, signal: new AbortController().signal }, async () => ({ kind: "enter", messages: noopMessages }));
-  assert.equal(noopDecision.messages, noopMessages, "original decision object returned");
-  const noopAssembly = await ctx.systemPrompt.assemble({ agent: noopAgent, scope: noopAgent, signal: new AbortController().signal });
-  const noopMemories = noopAssembly.contexts.find((c) => c.name === "openviking:memories");
-  assert.ok(noopMemories, "memories context contributed");
-  assert.equal(noopMemories.text, "", "no recall block for a message that already carries one");
+  assert.equal(noopDecision.messages, noopMessages, "recall does not append context to an already-injected message");
+});
+
+test("procedure recall is plugin context in the first model step and is not mirrored", async (t) => {
+  const cleanup = cleanupStack(t);
+  const server = await startFakeOpenViking();
+  cleanup(() => server.close());
+  const { ctx, fibers } = await mountSpine();
+  for (const baseFiber of fibers) cleanup(() => baseFiber.dispose());
+  const fiber = await ctx.plugin({ name: plugin.name, inject: plugin.inject, Config: plugin.Config, apply: plugin.apply }, makeConfig(server.url, tempState("procedure-prestep")));
+  cleanup(() => fiber.dispose());
+  const agent = makeAgent("procedure-agent", []);
+  ctx.agents.register(agent);
+  const messages = [{ role: "user", id: "procedure-step", content: [{ type: "text", text: "How do I recover missing billing attachments after an accepted send?" }], source: { kind: "user" } }];
+  const decision = await ctx.waterfall("agent/pre-step", { agent, messages, turn: 1, step: 1, signal: new AbortController().signal }, async () => ({ kind: "enter", messages }));
+  const recalled = decision.messages.find((message) => message.source.kind === "plugin");
+  assert.ok(recalled, "procedure recall is appended before the first model step");
+  assert.match(recalled.content[0].text, /<relevant-memories>/);
+  agent.session.append("user/message", recalled, { surfaceOp: "append" });
+  ctx.emit("session/event", agent.session, agent.session.events.at(-1));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(server.requests.filter((request) => request.url === "/api/v1/sessions/procedure-agent/messages").length, 0, "plugin context is never mirrored");
 });
 
 test("dispose stops plugin effects and a remount works cleanly", async (t) => {

@@ -1,6 +1,5 @@
 /**
- * The eleven OpenViking tools: `memfind`, `memsearch`, `memread`, `membrowse`,
- * `memgrep`, `memglob`, `memadd`, `memremove`, `memqueue`, `memcommit`, `memlearn`.
+ * The eleven OpenViking model tools.
  *
  * Each tool returns a canonical JSON value (validated against its output
  * schema); `output.render` produces the model-facing text. Infrastructure
@@ -15,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import type { OpenVikingClient } from "./client.js";
 import type { SessionManager } from "./session-sync.js";
 import { createUserMessage } from "@deepseek-ai/dsh-llm/message";
+import { createLearnService } from "./learn-service.js";
+import { parseVikingUri } from "./uri.js";
 import { OpenVikingError, isRecord, type GrepResult, type Json } from "./types.js";
 
 // ─── schema building blocks ─────────────────────────────────────────────
@@ -43,46 +44,6 @@ function text(...lines: string[]): { type: "text"; text: string }[] {
 
 function jsonText(value: unknown): { type: "text"; text: string }[] {
   return text(JSON.stringify(value, null, 2));
-}
-
-interface VikingUri {
-  scope: string;
-  segments: string[];
-}
-
-/**
- * Parse a canonical `viking://<scope>/<segments...>` URI. The whole first
- * token after the scheme is the scope, so `viking://resources.evil/x` parses
- * as scope `resources.evil` — never as scope `resources`. Rejects missing or
- * malformed scopes, literal `.`/`..` segments, and percent-encoded traversal
- * (`%2e%2e`, `%2e`, `..%2f`, …): every segment is decoded and refused when it
- * decodes to `.`, `..`, or a value containing a path separator.
- */
-function parseVikingUri(uri: string, tool: string): VikingUri {
-  const match = /^viking:\/\/([^/]+)(?:\/(.*))?$/.exec(uri);
-  if (!match) {
-    throw new Error(`${tool}: invalid URI format — must start with "viking://" followed by a scope`);
-  }
-  const isTraversal = (raw: string): boolean => {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(raw);
-    } catch {
-      decoded = raw; // malformed escapes (e.g. "%zz") cannot decode to traversal
-    }
-    return decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\");
-  };
-  const scope = match[1]!;
-  if (isTraversal(scope)) {
-    throw new Error(`${tool}: invalid URI — traversal segments ('.' or '..') are not allowed`);
-  }
-  const segments = match[2] === undefined ? [] : match[2].split("/").filter((segment) => segment !== "");
-  for (const segment of segments) {
-    if (isTraversal(segment)) {
-      throw new Error(`${tool}: invalid URI — traversal segments ('.' or '..') are not allowed`);
-    }
-  }
-  return { scope, segments };
 }
 
 /** `to`/`parent` targets must be an explicit path under `viking://resources/`. */
@@ -194,6 +155,9 @@ export function createOpenVikingTools(
   config: ToolConfig,
 ): ToolDefinition[] {
   void config;
+  // Shared learn business logic: the model tool and the /memlearn command
+  // both route through this service (redaction, limits, dedupe, persistence).
+  const learn = createLearnService(client);
 
   const memfind = defineTool({
     name: "memfind",
@@ -583,68 +547,14 @@ export function createOpenVikingTools(
 // `learn` tool) that writes *curated* lessons straight into OpenViking, so
 // durable knowledge does not depend on the next auto-commit's extractor.
 //
-// OpenViking has no "create a memory file" endpoint, so memlearn routes by
-// capability instead of pretending otherwise:
-//   - `skill`   → POST /api/v1/resources/skills (mint/update a playbook under
-//                 viking://agent/skills/<name>/; the service generates the
-//                 L1 overview and indexes it).
-//   - `target`  → append to an explicit existing memory file
-//                 (POST /api/v1/content/write; the service preserves the
-//                 MEMORY_FIELDS metadata block and re-embeds the file).
-//   - no target → semantic dedupe: search viking://user/memories/; when the
-//                 top hit clears `min_score`, append there (merge-style
-//                 dedupe that survives the extractor's free-text merge keys);
-//                 otherwise return `no-match` with actionable guidance.
-//
-// On any successful write the lesson is ALSO deferred into the *current*
-// agent turn as plugin-sourced context, so the model benefits immediately —
-// no need to wait for the next session's recall. Because the injected block
-// carries source.kind "plugin", the session-sync layer never mirrors it back,
-// so a just-learned lesson cannot be re-extracted as a new memory.
-
-
-type MemLearnResult = {
-  action: "created" | "updated" | "merged" | "no-match";
-  kind: "skill" | "memory";
-  uri: string;
-  score?: number;
-  redacted: number;
-  injected: boolean;
-  message: string;
-};
-
-const MEMLEARN_MAX_MEMORY_CHARS = 8_000;
-const MEMLEARN_MAX_SKILL_BODY_CHARS = 16_000;
-const MEMLEARN_DEFAULT_MIN_SCORE = 0.5;
-const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** Secret shapes redacted before anything is persisted (mirrors oh-my-pi). */
-const SECRET_PATTERNS: RegExp[] = [
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/g,
-  /\b(?:sk|pk|rk)-[A-Za-z0-9]{20,}/g,
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
-];
-
-function redactSecrets(text: string): { text: string; redacted: number } {
-  let redacted = 0;
-  let out = text;
-  for (const pattern of SECRET_PATTERNS) {
-    out = out.replace(pattern, () => {
-      redacted += 1;
-      return "[redacted]";
-    });
-  }
-  return { text: out, redacted };
-}
-
-function clampScore(value: number | undefined): number {
-  if (value === undefined) return MEMLEARN_DEFAULT_MIN_SCORE;
-  if (Number.isNaN(value)) return MEMLEARN_DEFAULT_MIN_SCORE;
-  return Math.min(1, Math.max(0, value));
-}
+// Business behavior lives in the shared LearnService
+// (src/learn-service.ts), so the model-facing tool and the human-facing
+// `/memlearn` command can never drift in redaction, limits, dedupe, Skill
+// persistence, and error handling. This tool only adapts: it passes the tool
+// arguments as normalized input and defers the learned lesson into the
+// current turn through `exec.deferContext` (source.kind "plugin", so
+// session-sync never mirrors it back) — a no-turn human command has no
+// deferred injection, which is why `injected` comes from the service.
 
 /** Defer the just-learned lesson into the current agent turn. */
 function deferLearned(
@@ -766,152 +676,30 @@ function deferLearned(
     },
     timeoutMs: 30_000,
     async execute(args, exec) {
-      const memory = (args.memory ?? "").trim();
-      const skill = args.skill;
-      if (!memory && !skill) {
-        throw new Error("memlearn: provide `memory` and/or `skill` — nothing to learn from.");
-      }
-      if (memory.length > MEMLEARN_MAX_MEMORY_CHARS) {
-        throw new Error(`memlearn: memory exceeds ${MEMLEARN_MAX_MEMORY_CHARS} characters — tighten the lesson.`);
-      }
-
-      // 1) Redact secrets BEFORE anything touches the wire.
-      const redactedMemory = redactSecrets(memory);
-      let totalRedacted = redactedMemory.redacted;
-
-      // 2) Skill channel: mint/update a playbook under viking://agent/skills/.
-      if (skill) {
-        const name = (skill.name ?? "").trim();
-        if (!SKILL_NAME_RE.test(name)) {
-          throw new Error(`memlearn: invalid skill name "${name}" — use kebab-case, e.g. \`web-search-deep-dive\`.`);
-        }
-        const rawBody = (skill.body ?? "").trim();
-        if (rawBody.length > MEMLEARN_MAX_SKILL_BODY_CHARS) {
-          throw new Error(`memlearn: skill body exceeds ${MEMLEARN_MAX_SKILL_BODY_CHARS} characters — tighten the playbook.`);
-        }
-        const body = redactSecrets(rawBody);
-        totalRedacted += body.redacted;
-        const description = redactSecrets((skill.description ?? "").trim());
-        totalRedacted += description.redacted;
-        // Existence is probed through the service's own skill lookup
-        // (0.4.13 stores skills under the user scope, so a hard-coded
-        // viking://agent/skills/<name> stat would never match).
-        const skillUri = `viking://agent/skills/${name}`;
-        let existed = false;
-        try {
-          await client.getSkill(name, exec.signal);
-          existed = true;
-        } catch (error) {
-          // Absence is signalled by OpenVikingError code NOT_FOUND; treat any
-          // error carrying that code as "does not exist yet".
-          const code =
-            error instanceof Error && "code" in error
-              ? (error as { code?: unknown }).code
-              : undefined;
-          if (code !== "NOT_FOUND") throw error;
-        }
-        const action = skill.action;
-        if (action === "create" && existed) {
-          throw new Error(
-            `memlearn: skill "${name}" already exists — pass action=update or omit action for automatic behavior.`,
-          );
-        }
-        if (action === "update" && !existed) {
-          throw new Error(
-            `memlearn: skill "${name}" does not exist — pass action=create or omit action for automatic behavior.`,
-          );
-        }
-        const payload = {
-          name,
-          description: description.text,
-          content: body.text,
-          ...(Array.isArray(skill.tags) && skill.tags.length > 0 ? { tags: skill.tags } : {}),
-          ...(Array.isArray(skill.allowed_tools) && skill.allowed_tools.length > 0 ? { allowed_tools: skill.allowed_tools } : {}),
-        };
-        const result = existed
-          ? await client.updateSkill(name, payload, { signal: exec.signal })
-          : await client.addSkill(payload, { signal: exec.signal });
-        const uri = typeof result.uri === "string" && result.uri ? result.uri : skillUri;
-        const lesson = `Skill ${name}: ${description.text}\n\n${body.text}`;
-        deferLearned(exec, "skill", uri, lesson);
-        const skillResult: MemLearnResult = {
-          action: existed ? "updated" : "created",
-          kind: "skill",
-          uri,
-          redacted: totalRedacted,
-          injected: true,
-          message: `Skill ${existed ? "updated" : "created"} at ${uri}. It is now searchable via memsearch and will surface in future sessions.`,
-        };
-        return skillResult;
-      }
-
-      // 3) Memory channel: explicit target first, then semantic dedupe.
-      if (args.target !== undefined) {
-        parseVikingUri(args.target, "memlearn");
-        const lesson = args.context ? `${redactedMemory.text}\n\nProvenance: ${args.context}` : redactedMemory.text;
-        await client.writeContent(args.target, lesson, { mode: "append", signal: exec.signal });
-        deferLearned(exec, "memory", args.target, lesson);
-        const targetResult: MemLearnResult = {
-          action: "merged",
-          kind: "memory",
-          uri: args.target,
-          redacted: totalRedacted,
-          injected: true,
-          message: `Appended lesson to ${args.target}.`,
-        };
-        return targetResult;
-      }
-
-      const minScore = clampScore(args.min_score);
-      const found = await client.find({
-        query: redactedMemory.text.slice(0, 4_000),
-        targetUri: "viking://user/memories/",
-        limit: 5,
-        signal: exec.signal,
-      });
-      const ranked = (found.memories ?? [])
-        .filter((item) => typeof item.score === "number" && typeof item.uri === "string")
-        .sort((a, b) => (b.score as number) - (a.score as number));
-      const best = ranked[0] as { uri?: string; score?: number } | undefined;
-      if (best && best.uri && (best.score ?? 0) >= minScore) {
-        const lesson = args.context ? `${redactedMemory.text}\n\nProvenance: ${args.context}` : redactedMemory.text;
-        await client.writeContent(best.uri, lesson, { mode: "append", signal: exec.signal });
-        deferLearned(exec, "memory", best.uri, lesson);
-        const mergeResult: MemLearnResult = {
-          action: "merged",
-          kind: "memory",
-          uri: best.uri,
-          score: best.score,
-          redacted: totalRedacted,
-          injected: true,
-          message: `Merged lesson into existing memory ${best.uri} (score ${best.score?.toFixed(2)}).`,
-        };
-        return mergeResult;
-      }
-
-      // No merge target: do not fake a write. Give the model a route forward.
-      const top = best ? ` closest hit scored ${(best.score ?? 0).toFixed(2)} (below ${minScore.toFixed(2)})` : "";
-      const noMatchResult: MemLearnResult = {
-        action: "no-match",
-        kind: "memory",
-        uri: "",
-        redacted: totalRedacted,
-        injected: false,
-        message:
-          `No existing memory is close enough to merge into${top}. ` +
-          `OpenViking has no create-memory endpoint, so choose one of: ` +
-          `(1) call memlearn again with \`skill\` to mint this as a reusable playbook; ` +
-          `(2) call memcommit to let the session extractor persist it; ` +
-          `(3) call memlearn with an explicit \`target\` URI of an existing memory file.`,
-      };
-      return noMatchResult;
+      const result = await learn.learn(
+        {
+          memory: args.memory,
+          context: args.context,
+          skill: args.skill,
+          target: args.target,
+          minScore: args.min_score,
+        },
+        {
+          signal: exec.signal,
+          inject:
+            typeof exec.deferContext === "function"
+              ? (kind, uri, text) => deferLearned(exec, kind, uri, text)
+              : undefined,
+        },
+      );
+      return result;
     },
   });
 
-  return [memsearch, memfind, memread, membrowse, memcommit, memlearn, memgrep, memglob, memadd, memremove, memqueue];
+  const tools = [memsearch, memfind, memread, membrowse, memcommit, memlearn, memgrep, memglob, memadd, memremove, memqueue];
+  return tools;
 }
 
-/** Register all eleven tools on `ctx.tools`. */
 export function registerOpenVikingTools(
   ctx: Context,
   client: OpenVikingClient,
@@ -922,6 +710,7 @@ export function registerOpenVikingTools(
     ctx.tools.register(tool);
   }
 }
+
 
 // ─── helpers ────────────────────────────────────────────────────────────
 

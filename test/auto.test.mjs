@@ -316,6 +316,194 @@ test("recall ranks leaves first, dedupes by abstract/uri, and applies the score 
   assert.ok(!block.includes("low score filler"), "below-threshold filler excluded");
 });
 
+test("recall expands cached memory branches when the global search returns only empty overviews", async () => {
+  const { client, calls } = stubClient();
+  client.find = (opts) => {
+    calls.push({ name: "find", opts });
+    if (opts.targetUri === "viking://user/memories/") {
+      return Promise.resolve({
+        memories: [
+          { uri: "viking://user/dsh/memories/entities/.overview.md", level: 1, score: 0.9, abstract: "" },
+        ],
+        resources: [],
+        skills: [],
+        total: 1,
+      });
+    }
+    if (opts.targetUri === "viking://user/memories/entities/方法论/") {
+      return Promise.resolve({
+        memories: [
+          {
+            uri: "viking://user/dsh/memories/entities/方法论/偶发缺页处置经验.md",
+            level: 2,
+            score: 0.84,
+            abstract: "先冻结写入并记录水位，再交叉核对证据平面，在影子空间回放验证。",
+          },
+        ],
+        resources: [],
+        skills: [],
+        total: 1,
+      });
+    }
+    return Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  };
+  client.tree = (opts) => {
+    calls.push({ name: "tree", opts });
+    return Promise.resolve([
+      { uri: "viking://user/memories/entities", isDir: true },
+      { uri: "viking://user/memories/entities/方法论", isDir: true },
+      { uri: "viking://user/memories/entities/方法论/偶发缺页处置经验.md", isDir: false },
+    ]);
+  };
+  const ctx = stubCtx();
+  const recall = createMemoryRecall(ctx, client, RECALL_CONFIG);
+
+  await recall.prepareStep("agent-1", userMessages(["账单附件缺失，如何保全现场、补偿并验证恢复？"]));
+  const block = recall.takeBlock("agent-1");
+
+  assert.match(block, /偶发缺页处置经验\.md/);
+  assert.match(block, /冻结写入并记录水位/);
+  assert.ok(!block.includes("entities/.overview.md"), "empty overview nodes are not injected");
+  assert.equal(calls.filter((call) => call.name === "tree").length, 1, "branch discovery runs once");
+  assert.ok(
+    calls.some(
+      (call) => call.name === "find" && call.opts.targetUri === "viking://user/memories/entities/方法论/",
+    ),
+    "the discovered methodology branch is searched",
+  );
+});
+
+test("recall treats deeper search leaves as leaves and renders overview content", async () => {
+  const { recall } = recallWith(
+    {
+      memories: [
+        {
+          uri: "viking://user/dsh/memories/entities/methods/nested/playbook.md",
+          level: 3,
+          score: 0.2,
+          overview: "nested recovery playbook",
+        },
+      ],
+      resources: [],
+      skills: [],
+      total: 1,
+    },
+    { agentSpaces: false },
+  );
+
+  await recall.prepareStep("agent-1", userMessages(["recovery playbook"]));
+  const block = recall.takeBlock("agent-1");
+  assert.match(block, /nested recovery playbook/);
+  assert.match(block, /nested\/playbook\.md/);
+});
+
+test("recall does not let an agent-space leaf suppress user branch fallback", async () => {
+  const { client, calls } = stubClient();
+  client.find = (opts) => {
+    calls.push({ name: "find", opts });
+    if (opts.targetUri === "viking://user/memories/") {
+      return Promise.resolve({
+        memories: [{ uri: "viking://user/memories/entities/.overview.md", level: 1, score: 0.9, abstract: "" }],
+        resources: [], skills: [], total: 1,
+      });
+    }
+    if (opts.targetUri === "viking://agent/") {
+      return Promise.resolve({
+        memories: [{ uri: "viking://agent/cases/unrelated.md", level: 2, score: 0.9, abstract: "unrelated agent case" }],
+        resources: [], skills: [], total: 1,
+      });
+    }
+    if (opts.targetUri === "viking://user/memories/entities/方法论/") {
+      return Promise.resolve({
+        memories: [{ uri: "viking://user/memories/entities/方法论/playbook.md", level: 2, score: 0.8, abstract: "user methodology leaf" }],
+        resources: [], skills: [], total: 1,
+      });
+    }
+    return Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  };
+  client.tree = (opts) => {
+    calls.push({ name: "tree", opts });
+    return Promise.resolve([
+      { uri: "viking://user/memories/entities/方法论", isDir: true },
+      { uri: "viking://user/memories/entities/方法论/playbook.md", isDir: false },
+    ]);
+  };
+  const recall = createMemoryRecall(stubCtx(), client, RECALL_CONFIG);
+  await recall.prepareStep("agent-1", userMessages(["recover missing attachments safely"]));
+  const block = recall.takeBlock("agent-1");
+  assert.match(block, /user methodology leaf/);
+  assert.ok(calls.some((call) => call.name === "tree"));
+});
+
+test("recall expands branches when global leaves are only below-threshold noise", async () => {
+  const { client, calls } = stubClient();
+  client.find = (opts) => {
+    calls.push({ name: "find", opts });
+    if (opts.targetUri === "viking://user/memories/") {
+      return Promise.resolve({
+        memories: [
+          { uri: "viking://user/memories/.overview.md", level: 1, score: 0.9, abstract: "" },
+          { uri: "viking://user/memories/events/unrelated.md", level: 2, score: 0.01, abstract: "unrelated noise" },
+        ],
+        resources: [], skills: [], total: 2,
+      });
+    }
+    if (opts.targetUri === "viking://user/memories/entities/方法论/") {
+      return Promise.resolve({
+        memories: [{ uri: "viking://user/memories/entities/方法论/playbook.md", level: 2, score: 0.8, abstract: "freeze evidence before recovery" }],
+        resources: [], skills: [], total: 1,
+      });
+    }
+    return Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  };
+  client.tree = (opts) => {
+    calls.push({ name: "tree", opts });
+    return Promise.resolve([
+      { uri: "viking://user/memories/entities/方法论", isDir: true },
+      { uri: "viking://user/memories/entities/方法论/playbook.md", isDir: false },
+    ]);
+  };
+  const recall = createMemoryRecall(stubCtx(), client, RECALL_CONFIG);
+  await recall.prepareStep("agent-1", userMessages(["recover missing attachments safely"]));
+  const block = recall.takeBlock("agent-1");
+  assert.match(block, /playbook\.md/);
+  assert.ok(!block.includes("unrelated noise"));
+  assert.ok(calls.some((call) => call.name === "tree"));
+});
+
+test("recall bounds branch fallback searches and reuses the tree cache", async () => {
+  const { client, calls } = stubClient();
+  client.find = (opts) => {
+    calls.push({ name: "find", opts });
+    return Promise.resolve({
+      memories: [{ uri: "viking://user/memories/.overview.md", level: 1, score: 0.9, abstract: "" }],
+      resources: [],
+      skills: [],
+      total: 1,
+    });
+  };
+  client.tree = (opts) => {
+    calls.push({ name: "tree", opts });
+    return Promise.resolve(
+      Array.from({ length: 24 }, (_, index) => [
+        { uri: `viking://user/memories/entities/category-${index}`, isDir: true },
+        { uri: `viking://user/memories/entities/category-${index}/memory.md`, isDir: false },
+      ]).flat(),
+    );
+  };
+  const ctx = stubCtx();
+  const recall = createMemoryRecall(ctx, client, { ...RECALL_CONFIG, agentSpaces: false });
+
+  await recall.prepareStep("agent-1", userMessages(["first unmatched query"]));
+  await recall.prepareStep("agent-1", userMessages(["second unmatched query"], 10));
+
+  assert.equal(calls.filter((call) => call.name === "tree").length, 1, "tree is reused across queries");
+  const branchCalls = calls.filter(
+    (call) => call.name === "find" && call.opts.targetUri !== "viking://user/memories/",
+  );
+  assert.equal(branchCalls.length, 32, "at most 16 branches are searched per query");
+});
+
 test("recall caps per-item chars and the total block to tokenBudget * 4 chars", async () => {
   const longAbstract = "x".repeat(900);
   const { recall } = recallWith(
@@ -601,6 +789,40 @@ test("recall cache hits record injected URIs so a later refresh does not re-inje
   assert.equal(userFindCalls.length, 2, "turn 2 cache hit + one refresh search");
 });
 
+
+test("procedure recall reserves a playbook slot without changing entity recall", async () => {
+  const { client, calls, recall } = recallWith({ memories: [], resources: [], skills: [], total: 0 });
+  client.tree = async () => [
+    { uri: "viking://user/memories/entities/方法论/integrity-gap", isDir: false },
+    { uri: "viking://user/memories/entities/project-owner", isDir: false },
+  ];
+  client.find = async (opts) => {
+    calls.push({ name: "find", opts });
+    if (opts.targetUri === "viking://user/memories/entities/方法论/") {
+      return { memories: [{ uri: "viking://user/memories/entities/方法论/integrity-gap", level: 2, score: 0.3, abstract: "recover missing billing attachments after accepted sends" }] };
+    }
+    return { memories: [{ uri: "viking://user/memories/events/unrelated", level: 2, score: 0.98, abstract: "unrelated event" }] };
+  };
+  await recall.prepareStep("procedure", userMessages(["How do I recover missing billing attachments after an accepted send?"]));
+  const block = recall.takeBlock("procedure");
+  assert.match(block, /integrity-gap/);
+  assert.ok(calls.some((call) => call.opts.targetUri === "viking://user/memories/entities/方法论/"));
+
+  const ordinary = recallWith({ memories: [{ uri: "viking://user/memories/entities/owner", level: 2, score: 0.9, abstract: "owner is Ada" }], resources: [], skills: [], total: 1 });
+  await ordinary.recall.prepareStep("entity", userMessages(["Who owns project Atlas?"]));
+  assert.equal(ordinary.calls.some((call) => call.name === "tree"), false);
+});
+
+test("procedure branch failures fall back to global candidates", async () => {
+  const { client, recall } = recallWith({ memories: [{ uri: "viking://user/memories/events/recovery", level: 2, score: 0.9, abstract: "global recovery note" }], resources: [], skills: [], total: 1 });
+  client.tree = async () => [{ uri: "viking://user/memories/playbook/failing", isDir: false }];
+  client.find = async (opts) => {
+    if (opts.targetUri === "viking://user/memories/playbook/") throw new Error("branch unavailable");
+    return { memories: [{ uri: "viking://user/memories/events/recovery", level: 2, score: 0.9, abstract: "global recovery note" }] };
+  };
+  await recall.prepareStep("fallback", userMessages(["What recovery workflow should I follow?"]));
+  assert.match(recall.takeBlock("fallback"), /global recovery note/);
+});
 
 // ─── session-start memory map ──────────────────────────────────────────
 

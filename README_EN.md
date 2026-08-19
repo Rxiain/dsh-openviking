@@ -32,6 +32,18 @@ Also: indexed repository context, auto recall via the context-injection
 channel, and session sync + auto
 commit.
 
+### Procedure-experience auto recall
+
+Workflow questions about audit, recovery, compensation, replay, verification, remediation, diagnosis, migration, or ordered steps enable a dedicated procedure lane in addition to ordinary global recall. The plugin first filters cached user-memory leaf branches whose normalized paths contain markers such as `方法论`, `playbook`, `workflow`, `runbook`, `pattern`, `case`, or `skill`, then searches at most 16 procedure branches. Each branch has a 3-second deadline; failures and timeouts degrade without failing the model step. When a candidate meets the existing relevance threshold, the best procedure result reserves one injection slot before ordinary user/agent results fill the remaining capacity. Existing token, deduplication, content-size, and plugin-context isolation rules still apply.
+
+## Human slash commands
+
+When the DSH command registry is available, the plugin also registers a human-invoked slash command (see [`docs/commands.md`](docs/commands.md)):
+
+| Command | Purpose |
+| --- | --- |
+| `/memlearn <lesson>` | Deliberate human-driven memory capture: the exact same redaction / dedupe / persistence service as the `memlearn` model tool, with no model turn; the raw input never enters the session log |
+
 ![Memory retrieval in action](docs/screenshot-memory-recall.png)
 
 ## Why OpenViking?

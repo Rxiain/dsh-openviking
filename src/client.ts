@@ -632,4 +632,5 @@ export class OpenVikingClient {
     });
     return isRecord(result) ? (result as TaskResult) : {};
   }
+
 }

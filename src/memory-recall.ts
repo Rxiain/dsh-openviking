@@ -78,6 +78,9 @@ export interface MemoryRecall {
 
 const AUTO_RECALL_SEARCH_LIMIT = 20;
 const AUTO_RECALL_QUERY_CHARS = 4000;
+const AUTO_RECALL_BRANCH_LIMIT = 16;
+const AUTO_RECALL_BRANCH_TIMEOUT_MS = 3_000;
+const AUTO_RECALL_TREE_TTL_MS = 5 * 60 * 1000;
 
 const RECALL_STOPWORDS = new Set([
   "what",
@@ -109,6 +112,13 @@ const RECALL_TOKEN_RE = /[a-z0-9]{2,}/gi;
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE =
   /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天|上周|下周|上个月|下个月|去年|明年/i;
+const PROCEDURE_INTENT_RE =
+  /\b(workflow|workflows|audit|auditing|recover|recovery|restore|restoration|compensat(?:e|ion)|replay|replay(?:ing)?|verif(?:y|ication)|remediat(?:e|ion)|diagnos(?:e|is)|migrat(?:e|ion)|runbook|playbook|procedure|process|steps?|how do i|how can i|what steps)\b|审计|审核|恢复|补偿|重放|回放|验证|核验|修复|补救|诊断|迁移|流程|步骤|怎么做|如何处理|排查/i;
+const PROCEDURE_PATH_RE = /(?:^|[\\/])(?:方法论|方法|流程|剧本|playbook|playbooks|method|methods|pattern|patterns|case|cases|runbook|runbooks|workflow|workflows|skill|skills)(?:[\\/]|$)/i;
+
+export function hasProcedureIntent(query: string): boolean {
+  return PROCEDURE_INTENT_RE.test(query);
+}
 
 // Bounds for the per-agent recall cache: at most RECALL_CACHE_MAX_PER_AGENT
 // entries per agent (oldest evicted on overflow, FIFO) and entries expire
@@ -144,6 +154,70 @@ export function createMemoryRecall(
     injectedUris: Set<string>;
   }
   const agentStates = new Map<string, RecallState>();
+  let memoryBranches: string[] | undefined;
+  let procedureMemoryBranches: string[] | undefined;
+  let memoryBranchesFetchedAt = 0;
+  let memoryBranchesInflight: Promise<string[]> | undefined;
+  let procedureMemoryBranchesInflight: Promise<string[]> | undefined;
+
+  async function discoverMemoryBranches(procedureOnly: boolean, signal?: AbortSignal): Promise<string[]> {
+    const now = Date.now();
+    const cached = procedureOnly ? procedureMemoryBranches : memoryBranches;
+    if (cached !== undefined && now - memoryBranchesFetchedAt < AUTO_RECALL_TREE_TTL_MS) return cached;
+    const inflight = procedureOnly ? procedureMemoryBranchesInflight : memoryBranchesInflight;
+    if (inflight) return inflight;
+    const load = (async () => {
+      try {
+        const result = await client.tree({ uri: "viking://user/memories/", nodeLimit: 200, levelLimit: 3, signal });
+        const branches = new Set<string>();
+        if (Array.isArray(result)) {
+          for (const node of result) {
+            if (!isRecord(node) || node.isDir !== false || typeof node.uri !== "string") continue;
+            const slash = node.uri.lastIndexOf("/");
+            if (slash <= "viking://user/memories".length) continue;
+            const branch = `${node.uri.slice(0, slash + 1)}`;
+            if (!procedureOnly || PROCEDURE_PATH_RE.test(branch)) branches.add(branch);
+          }
+        }
+        const discovered = [...branches].sort((a, b) => b.length - a.length || a.localeCompare(b)).slice(0, AUTO_RECALL_BRANCH_LIMIT);
+        if (procedureOnly) procedureMemoryBranches = discovered;
+        else memoryBranches = discovered;
+        memoryBranchesFetchedAt = Date.now();
+        return discovered;
+      } catch (error) {
+        if (!signal?.aborted) {
+          const message = error instanceof Error ? error.message : String(error);
+          const dedupeKey = `tree:${client.endpoint}:${message}`;
+          if (!warningKeys.has(dedupeKey)) {
+            warningKeys.add(dedupeKey);
+            logger.warn("memory branch discovery failed; skipping fallback", { endpoint: client.endpoint, error: message });
+          }
+        }
+        return cached ?? [];
+      } finally {
+        if (procedureOnly) procedureMemoryBranchesInflight = undefined;
+        else memoryBranchesInflight = undefined;
+      }
+    })();
+    if (procedureOnly) procedureMemoryBranchesInflight = load;
+    else memoryBranchesInflight = load;
+    return load;
+  }
+
+  function hasRenderableLeaf(items: SearchItem[], scoreThreshold: number): boolean {
+    return items.some(
+      (item) => isLeafLikeMemory(item) && hasMemoryText(item) && recallClampScore(item.score) >= scoreThreshold,
+    );
+  }
+
+  function hasEmptyBranch(item: SearchItem): boolean {
+    return !isLeafLikeMemory(item) && ("abstract" in item || "overview" in item || "content" in item) && !hasMemoryText(item);
+  }
+
+  function hasMemoryText(item: SearchItem): boolean {
+    const hasTextField = "abstract" in item || "overview" in item || "content" in item;
+    return !hasTextField || Boolean((item.abstract ?? item.overview ?? item.content ?? "").trim());
+  }
 
   /** Store a non-empty block for (agent, query), evicting the oldest entry on overflow. */
   function setCache(agentKey: string, query: string, block: string): void {
@@ -208,41 +282,28 @@ export function createMemoryRecall(
       for (const uri of extractMemoryUris(cached.block)) state.injectedUris.add(uri);
       return;
     }
-
-    let rawResults: SearchItem[] = [];
+    const procedural = hasProcedureIntent(query);
+    const generalResults: SearchItem[] = [];
+    const procedureResults: SearchItem[] = [];
+    let procedureBranches = 0;
+    let procedureFailures = 0;
+    let procedureTimedOut = 0;
     const queryText = query.slice(0, AUTO_RECALL_QUERY_CHARS);
     try {
-      // Two spaces, one recall: user memories (preferences/entities/events)
-      // plus the agent space (cases/patterns/tools/skills memories and shared
-      // skill playbooks). The agent-space search uses the `viking://agent/`
-      // prefix — not a per-agent hash — because the service's tenant filter
-      // pins memory/skill hits to the calling user's and agent's owner spaces,
-      // so a broad prefix can never leak another tenant's memories.
       const searches = [
-        client.find({
-          query: queryText,
-          targetUri: "viking://user/memories/",
-          limit: AUTO_RECALL_SEARCH_LIMIT,
-          scoreThreshold: config.scoreThreshold,
-          signal,
-        }),
+        client.find({ query: queryText, targetUri: "viking://user/memories/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: config.scoreThreshold, signal }),
         ...(config.agentSpaces
-          ? [
-              client.find({
-                query: queryText,
-                targetUri: "viking://agent/",
-                limit: AUTO_RECALL_SEARCH_LIMIT,
-                scoreThreshold: config.scoreThreshold,
-                signal,
-              }),
-            ]
+          ? [client.find({ query: queryText, targetUri: "viking://agent/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: config.scoreThreshold, signal })]
           : []),
       ];
       const settled = await Promise.allSettled(searches);
-      for (const outcome of settled) {
+      const userResults: SearchItem[] = [];
+      for (const [index, outcome] of settled.entries()) {
         if (outcome.status === "fulfilled") {
           const result = outcome.value;
-          rawResults.push(...(result.memories ?? []), ...(result.resources ?? []), ...(result.skills ?? []));
+          const items = [...(result.memories ?? []), ...(result.resources ?? []), ...(result.skills ?? [])];
+          generalResults.push(...items);
+          if (index === 0) userResults.push(...items);
           continue;
         }
         if (signal?.aborted) return;
@@ -250,14 +311,54 @@ export function createMemoryRecall(
         const dedupeKey = `recall:${client.endpoint}:${message}`;
         if (!warningKeys.has(dedupeKey)) {
           warningKeys.add(dedupeKey);
-          logger.warn("auto recall space search failed; skipping that space", {
-            endpoint: client.endpoint,
-            error: message,
-          });
+          logger.warn("auto recall space search failed; skipping that space", { endpoint: client.endpoint, error: message });
         }
       }
-      // All spaces failed: keep the previous behaviour of an empty step.
-      if (settled.length > 0 && settled.every((o) => o.status === "rejected")) return;
+      const needsBranchFallback = userResults.some(hasEmptyBranch) && !hasRenderableLeaf(userResults, config.scoreThreshold);
+      if (procedural || needsBranchFallback) {
+        const branches = await discoverMemoryBranches(procedural, signal);
+        procedureBranches = procedural ? branches.length : 0;
+        const branchResults = await Promise.allSettled(
+          branches.map(async (targetUri) => {
+            const controller = new AbortController();
+            const abort = () => controller.abort();
+            let timedOut = false;
+            if (signal?.aborted) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
+            const timeout = setTimeout(() => {
+              if (procedural) {
+                timedOut = true;
+                procedureTimedOut += 1;
+              }
+              controller.abort();
+            }, AUTO_RECALL_BRANCH_TIMEOUT_MS);
+            try {
+              return await client.find({ query: queryText, targetUri, limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: config.scoreThreshold, signal: controller.signal });
+            } catch (error) {
+              if (timedOut) throw Object.assign(new Error("procedure branch timed out"), { procedureTimeout: true });
+              throw error;
+            } finally {
+              clearTimeout(timeout);
+              signal?.removeEventListener("abort", abort);
+            }
+          }),
+        );
+        for (const outcome of branchResults) {
+          if (outcome.status === "fulfilled") {
+            const result = outcome.value;
+            const items = [...(result.memories ?? []), ...(result.resources ?? []), ...(result.skills ?? [])];
+            if (procedural) procedureResults.push(...items);
+            else generalResults.push(...items);
+          } else if (
+            procedural &&
+            !signal?.aborted &&
+            !(outcome.reason && typeof outcome.reason === "object" && "procedureTimeout" in outcome.reason)
+          ) {
+            procedureFailures += 1;
+          }
+        }
+      }
+      if (settled.every((outcome) => outcome.status === "rejected") && generalResults.length === 0 && procedureResults.length === 0) return;
     } catch (error) {
       if (signal?.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -269,12 +370,10 @@ export function createMemoryRecall(
       return;
     }
 
-    // Empty search results are never cached: a later identical query must be
-    // able to pick up newly created memories.
-    if (rawResults.length === 0) return;
-
-    const ranked = pickMemoriesForInjection(rawResults, config.limit, query, config.scoreThreshold);
-    // No injection-worthy memories: the empty outcome is not cached either.
+    if (generalResults.length === 0 && procedureResults.length === 0) return;
+    const generalRanked = pickMemoriesForInjection(generalResults, config.limit, query, config.scoreThreshold);
+    const procedureRanked = procedural ? pickMemoriesForInjection(procedureResults, 1, query, config.scoreThreshold) : [];
+    const ranked = selectRecallLanes(procedureRanked, generalRanked, config.limit);
     if (ranked.length === 0) return;
 
     let processed = postProcessMemories(ranked, config.maxContentChars);
@@ -300,7 +399,18 @@ export function createMemoryRecall(
     }
 
     blocks.set(agentKey, block);
-    logger.info("auto recall prepared", { session: agentKey, count: processed.length, incremental });
+    logger.info("auto recall prepared", {
+      session: agentKey,
+      count: processed.length,
+      incremental,
+      procedural,
+      procedureBranches,
+      procedureCandidates: procedureRanked.length,
+      selectedLanes: ranked.map((item) => procedureRanked.some((candidate) => candidate.uri === item.uri) ? "procedure" : "general"),
+      procedureFailures,
+      procedureTimedOut,
+      fallback: procedural && procedureRanked.length === 0,
+    });
   }
 
   function takeBlock(agentKey: string): string {
@@ -341,7 +451,6 @@ export function createMemoryRecall(
     try {
       const stats = await client.memoryStats();
       // Turn-generation check: the map belongs to the turn that triggered it.
-      // If the agent has since moved to a later turn (or was forgotten), the
       // late result must be discarded — a stale map would otherwise be set
       // here and injected into a turn it never belonged to. When the turn has
       // NOT advanced the check passes and the block lands as usual.
@@ -447,6 +556,10 @@ function recallClampScore(value: unknown): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function isLeafLikeMemory(item: SearchItem): boolean {
+  return (typeof item.level === "number" && item.level >= 2) || item.is_leaf === true;
+}
+
 function lexicalOverlapBoost(tokens: string[], text: string): number {
   if (tokens.length === 0 || !text) return 0;
   const haystack = ` ${text.toLowerCase()} `;
@@ -469,10 +582,11 @@ function isPreferencesMemory(item: SearchItem): boolean {
     Boolean(item.uri?.endsWith("/preferences"))
   );
 }
-
-function isLeafLikeMemory(item: SearchItem): boolean {
-  return item.level === 2 || item.is_leaf === true;
+function hasMemoryText(item: SearchItem): boolean {
+  const hasTextField = "abstract" in item || "overview" in item || "content" in item;
+  return !hasTextField || Boolean((item.abstract ?? item.overview ?? item.content ?? "").trim());
 }
+
 
 function rankForInjection(item: SearchItem, query: RecallProfile): number {
   const baseScore = recallClampScore(item.score);
@@ -513,14 +627,17 @@ function pickMemoriesForInjection(
   const seen = new Set<string>();
 
   for (const item of sorted) {
+    if (!hasMemoryText(item)) continue;
     const key = getMemoryDedupeKey(item);
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(item);
   }
 
-  const leaves = deduped.filter((item) => isLeafLikeMemory(item));
-  if (leaves.length >= limit) return leaves.slice(0, limit);
+  const leaves = deduped.filter(
+    (item) => isLeafLikeMemory(item) && recallClampScore(item.score) >= scoreThreshold,
+
+  );
 
   const picked = [...leaves];
   const used = new Set(leaves.map((item) => item.uri));
@@ -532,19 +649,38 @@ function pickMemoriesForInjection(
   }
   return picked;
 }
+function selectRecallLanes(procedure: SearchItem[], general: SearchItem[], limit: number): SearchItem[] {
+  if (limit <= 0) return [];
+  const selected: SearchItem[] = [];
+  const usedUris = new Set<string>();
+  const reserved = procedure[0];
+  if (reserved?.uri) {
+    selected.push(reserved);
+    usedUris.add(reserved.uri);
+  }
+  for (const item of general) {
+    if (selected.length >= limit) break;
+    if (!item.uri || usedUris.has(item.uri)) continue;
+    selected.push(item);
+    usedUris.add(item.uri);
+  }
+  return selected;
+}
 
 function postProcessMemories(items: SearchItem[], maxContentChars: number): SearchItem[] {
-  return items.map((item) => {
-    const abstract = (item.abstract ?? "").trim();
-    const content = (item.content ?? "").trim();
-    // Prefer the condensed abstract (reference default) over the full body.
-    let displayContent = "";
-    if (abstract) displayContent = abstract;
-    else if (content) displayContent = content;
-    if (displayContent.length > maxContentChars) displayContent = `${displayContent.slice(0, maxContentChars)}...`;
-    return { ...item, content: displayContent, abstract: abstract || undefined };
-  });
+  return items
+    .filter((item) => hasMemoryText(item))
+    .map((item) => {
+      const abstract = (item.abstract ?? "").trim();
+      const overview = (item.overview ?? "").trim();
+      const content = (item.content ?? "").trim();
+      // Prefer the condensed abstract, then the overview, then full content.
+      let displayContent = abstract || overview || content;
+      if (displayContent.length > maxContentChars) displayContent = `${displayContent.slice(0, maxContentChars)}...`;
+      return { ...item, content: displayContent, abstract: abstract || undefined, overview: overview || undefined };
+    });
 }
+
 
 const MEMORY_URI_RE = /<memory uri="([^"]+)">/g;
 

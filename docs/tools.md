@@ -1,11 +1,7 @@
 # Tools & Automatic Behavior
 
-The ten `mem*` tools and the automatic enhancement/synchronization layers.
-
-## Tools
-
-All ten tools talk HTTP to the OpenViking service. Failures throw — the model
-never sees fake `"Error: ..."` success values.
+The eleven base `mem*` tools talk HTTP to the OpenViking service. Failures throw —
+the model never sees fake `"Error: ..."` success values.
 
 | Tool | Description |
 | --- | --- |
@@ -88,6 +84,56 @@ Recall is one-shot per user message, with a per-agent cache. Because injected
 context has `source.kind` ≠ `user`, it is never mirrored into OpenViking, so
 recalled memories cannot be re-extracted as new memories (the sync layer also
 strips any embedded `<relevant-memories>` block defensively).
+
+#### Procedure-intent recall lane
+
+Operational workflow questions get a dedicated candidate lane so a durable
+playbook is not buried under higher-scoring event or entity memories.
+Query intent is classified locally — no model call — by Chinese and English
+workflow, audit, recovery, compensation, replay, verification, remediation,
+diagnosis, migration, and ordered-step signals (e.g. `workflow`, `recover`,
+`audit`, `补偿`, `恢复`, `流程`, `步骤`, `怎么做`). Non-procedural queries
+keep the ordinary global recall described above.
+
+For a procedural query, the plugin additionally searches procedure-bearing
+leaf branches of the cached user-memory tree. A branch is procedure-bearing
+when its normalized path contains a stable marker such as `方法论`,
+`方法`, `流程`, `playbook`, `method(s)`, `pattern(s)`, `case(s)`,
+`runbook`, `workflow(s)`, or `skill(s)` — marker presence only decides lane
+eligibility; the branch-local OpenViking semantic score remains the
+relevance authority. Retrieval is bounded and cancellation-aware:
+
+- branch discovery reads the cached tree (`viking://user/memories/`, up to
+  200 nodes, 3 levels, TTL 5 minutes) and keeps at most 16 branches, longest
+  path first;
+- each branch search gets a 3-second deadline and shares the existing search
+  limit (20) and score threshold (`autoRecall.scoreThreshold`);
+- a branch that times out, fails, or is cancelled degrades to the remaining
+  candidates — a procedure failure never fails the model request.
+
+The best qualifying procedure candidate (deduplicated, score-thresholded) is
+reserved **one injected slot** before ordinary general/agent candidates fill
+the remaining `autoRecall.limit` capacity; the reserved URI is excluded from
+the filler set. One slot is deliberate: it guarantees a playbook without
+turning every process question into a memory-only response. If no procedure
+candidate meets the threshold, no placeholder is injected and the global
+selection is used unchanged. The combined ordered selection still honors the
+existing per-item content cap and total token budget — a procedure entry that
+cannot fit the budget is omitted rather than exceeding it.
+
+**Non-goals.** The lane never changes OpenViking server taxonomy, schema, or
+extractor behavior; it never converts ordinary memories into Skills, does not
+replace native Skill retrieval, and adds no persistent local index. A
+procedure that does not meet branch-local semantic relevance is not
+guaranteed recall. Explicit Skills remain ordinary candidates unless they
+live in a procedure-bearing branch; promoting a memory into a reusable
+playbook stays a deliberate `memlearn ... skill` decision by
+the user or model.
+
+Structured diagnostics for each prepared step record the intent decision,
+procedure branch count, qualifying procedure candidate count, selected lane
+mix, timeouts, failures, and fallback outcomes (whether a procedural query
+ended up with no procedure candidate).
 
 ### Session sync
 
