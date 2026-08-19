@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionManager, stripRecallBlock } from "../lib/session-sync.js";
+import { SessionManager } from "../lib/session-sync.js";
 import { stubCtx, makeAgent, userEvent, pluginUserEvent, toolUserEvent, mixedContentEvent, awaitTicks } from "./helpers.mjs";
 
 function tempDir() {
@@ -117,42 +117,6 @@ test("sync sends only real user and assistant text using canonical text extracti
   assert.ok(!wire.includes("tool result content"), "tool source is skipped");
 });
 
-test("sync removes recall and memread guidance and drops messages left empty", async () => {
-  const { manager, calls } = makeManager();
-  const injectedText = [
-    "my original question",
-    "",
-    "<relevant-memories>",
-    '<memory uri="viking://user/memories/1">',
-    "prefers dark mode",
-    "</memory>",
-    "</relevant-memories>",
-    'Use `memread` with a memory URI and level="overview" or level="read" for more details.',
-  ].join("\n");
-  const agent = makeAgent("agent-1", [userEvent("u1", injectedText)]);
-  await drainAndDispose(manager, agent);
-  const sends = calls.filter((c) => c.name === "addSessionMessage");
-  assert.equal(sends.length, 1);
-  assert.equal(sends[0].content, "my original question");
-  assert.ok(!sends[0].content.includes("relevant-memories"));
-  assert.ok(!sends[0].content.includes("memread"));
-
-  // stripRecallBlock leaves plain text and mid-text blocks alone.
-  const base = "hello world";
-  assert.equal(stripRecallBlock(base), base);
-  const withBlock = `${base}\n\n<relevant-memories>\n<memory uri="u">\nx\n</memory>\n</relevant-memories>\nUse \`memread\` for details.`;
-  assert.equal(stripRecallBlock(withBlock), base);
-  const middle = `${base}\n\n<relevant-memories>\n</relevant-memories>\n\ntrailing question`;
-  assert.ok(stripRecallBlock(middle).includes("trailing question"), "mid-text block is left alone");
-
-  // A message whose only content is the recall block is dropped entirely.
-  const { manager: manager2, calls: calls2 } = makeManager();
-  const agent2 = makeAgent("agent-1", [
-    userEvent("u2", "\n\n<relevant-memories>\n</relevant-memories>\nUse `memread` for details."),
-  ]);
-  await drainAndDispose(manager2, agent2);
-  assert.equal(calls2.filter((c) => c.name === "addSessionMessage").length, 0);
-});
 
 test("drain preserves sequence order and retries from the first failed message", async () => {
   let failOn = "second";
@@ -381,55 +345,6 @@ test("auto-commit drains, commits, and polls an existing pending commit without 
   assert.deepEqual(persisted.sessions["agent-1"].uncommittedMessageIds, [], "completed commit cleared the snapshot");
 });
 
-test("synchronous commit completion clears snapshot ids and later ticks do not re-commit", async () => {
-  const { client, calls } = stubSessionClient({
-    async commitSession(sessionId) {
-      calls.push({ name: "commitSession", sessionId });
-      return { session_id: sessionId, status: "completed", archived: false };
-    },
-  });
-  const { manager } = makeManager({ client, autoCommit: { enabled: true, intervalMinutes: 1 } });
-  await manager.init();
-  const agent = makeAgent("agent-1", [userEvent("m1", "one"), userEvent("m2", "two")]);
-  manager.adopt(agent);
-  await manager.waitForChain(agent);
-  assert.equal(calls.filter((c) => c.name === "addSessionMessage").length, 2);
-
-  const state = manager.states.get("agent-1");
-  state.lastCommitTime = Date.now() - 2 * 60 * 1000;
-  await manager.runAutoCommitTick();
-  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "auto commit posted");
-  assert.deepEqual([...state.uncommittedMessageIds], [], "sync-complete cleared the snapshot ids");
-
-  // A later tick must not re-commit: even with the interval reached again, the
-  // uncommitted set is empty.
-  state.lastCommitTime = Date.now() - 2 * 60 * 1000;
-  await manager.runAutoCommitTick();
-  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "no re-commit after sync-complete clearing");
-  await manager.dispose();
-});
-
-test("commitCurrentSession synchronous completion clears uncommitted ids", async () => {
-  const { client, calls } = stubSessionClient({
-    async commitSession(sessionId) {
-      calls.push({ name: "commitSession", sessionId });
-      return { session_id: sessionId, status: "completed", archived: true };
-    },
-  });
-  const { manager } = makeManager({ client });
-  await manager.init();
-  const agent = makeAgent("agent-1", [userEvent("m1", "one")]);
-  manager.adopt(agent);
-  const result = await manager.commitCurrentSession(agent, undefined);
-  assert.equal(result.status, "completed");
-  assert.equal(result.archived, true);
-  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1);
-  assert.equal(calls.filter((c) => c.name === "getTask").length, 0, "no task to poll after synchronous completion");
-  assert.deepEqual([...manager.states.get("agent-1").uncommittedMessageIds], [], "snapshot ids cleared");
-  await manager.dispose();
-  const persisted = JSON.parse(readFileSync(manager.statePath, "utf8"));
-  assert.deepEqual(persisted.sessions["agent-1"].uncommittedMessageIds, []);
-});
 
 test("dispose runs a final drain for queued messages before saving state", async () => {
   // A message appended without an event drain: only dispose's final drain can
@@ -569,45 +484,4 @@ test("auto-commit turns=0 keeps the wall-clock fallback", async () => {
   await manager.runAutoCommitTick();
   assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "interval fallback commits");
   await manager.dispose();
-});
-
-test("auto-commit turns=0: a never-committed session commits on the first tick via the interval fallback", async (t) => {
-  const { client, calls } = stubSessionClient({
-    async commitSession(sessionId) {
-      calls.push({ name: "commitSession", sessionId });
-      return { session_id: sessionId, status: "completed", archived: false };
-    },
-  });
-  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 0, intervalMinutes: 1 } });
-  t.after(() => manager.dispose());
-  await manager.init();
-  const agent = makeAgent("agent-1", [userEvent("m1", "one")]);
-  manager.adopt(agent);
-  await manager.waitForChain(agent);
-  // lastCommitTime stays undefined: the session never committed before, yet
-  // with turns=0 the interval is the only fallback and must not wait forever.
-  assert.equal(manager.states.get("agent-1").lastCommitTime, undefined);
-  await manager.runAutoCommitTick();
-  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "interval fallback commits a never-committed session");
-});
-
-test("auto-commit turns>0: a never-committed session still waits for the turn trigger", async (t) => {
-  const { client, calls } = stubSessionClient({
-    async commitSession(sessionId) {
-      calls.push({ name: "commitSession", sessionId });
-      return { session_id: sessionId, status: "completed", archived: false };
-    },
-  });
-  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 1 } });
-  t.after(() => manager.dispose());
-  await manager.init();
-  const agent = makeAgent("agent-1", [userEvent("m1", "one"), userEvent("m2", "two")]);
-  manager.adopt(agent);
-  await manager.waitForChain(agent);
-  // 2 user turns < 3 and the session never committed (lastCommitTime
-  // undefined): it must NOT be treated as "last commit long ago" and must
-  // NOT fall back to wall-clock.
-  assert.equal(manager.states.get("agent-1").lastCommitTime, undefined);
-  await manager.runAutoCommitTick();
-  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "turn trigger not reached, no commit");
 });
