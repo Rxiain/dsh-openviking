@@ -375,9 +375,15 @@ export function createCompatScope<T>(options: CompatScopeOptions<T>): CompatSett
     load: async () => {
       fallbackStarted = true;
       await fallback?.load();
-      // The official controller carries load() at runtime; the contract type
-      // omits it, so the call is made through the narrowed face.
-      await (primary as SettingsScope<T> & { load(): Promise<void> }).load();
+      // The official controller carried load() at runtime through 0.1.1-rc.2,
+      // where the contract type omitted it and the call went through a
+      // narrowed face. On 0.1.2-alpha.1 it is gone from the runtime too, so
+      // the cast describes nothing and calling it throws. Probe instead:
+      // bind() already triggers mirror.ensure() and the controller publishes
+      // through subscribe(), so skipping the explicit refresh loses nothing
+      // on hosts that no longer expose it.
+      const withLoad = primary as SettingsScope<T> & { load?(): Promise<void> };
+      if (typeof withLoad.load === "function") await withLoad.load();
     },
     // The batch surface exists only while the bridge controller is the active
     // transport; the official scope path still writes per-field. A getter
