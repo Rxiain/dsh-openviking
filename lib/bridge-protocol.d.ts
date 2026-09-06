@@ -3,7 +3,7 @@
  * dsh-openviking. Dependency-free by construction: both halves import it and
  * the browser bundle must never drag in host runtime dependencies.
  *
- * DSH 0.1.0-rc.6 host-apiproxy serves only its hard-coded settings allowlist
+ * Pre-0.1.2 host-apiproxy serves only its hard-coded settings allowlist
  * (WEB_SETTINGS_NAMESPACES), so every third-party namespace answers
  * "settings-not-exposed" and the web card can only explain the gap. This
  * bridge re-serves the openviking namespace through the host settings seam

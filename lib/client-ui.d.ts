@@ -17,7 +17,7 @@
  * loader format (`window.__ModuleLoader__.load`) and served by the host's
  * client-module registry at `/plugins/dsh-openviking/client.js`.
  */
-import type { ClientContext } from "@deepseek-ai/dsh-client-runtime/client";
+import type { Context as ClientContext } from "@deepseek-ai/cordis";
 declare module "@deepseek-ai/dsh-client-ui-slots" {
     interface LocaleNamespaceMap {
         /** Dictionary namespace owned by this card. */

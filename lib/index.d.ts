@@ -20,7 +20,7 @@ export declare const name = "openviking";
 /** Services required by this plugin. `agents` guarantees the registry is ready and lets us adopt live agents. */
 export declare const inject: string[];
 /** User-settings namespace carrying this plugin's configuration. */
-export declare const SETTINGS_NAMESPACE: import("@deepseek-ai/dsh-settings").SettingsNamespace;
+export declare const SETTINGS_NAMESPACE = "openviking";
 export interface RepoContextConfig {
     /** Inject the indexed-repository list into the system prompt. */
     enabled: boolean;
@@ -32,7 +32,7 @@ export interface AutoRecallConfig {
     enabled: boolean;
     /** Maximum memories injected per step. */
     limit: number;
-    /** Minimum score for non-leaf filler memories (0–1). */
+    /** Minimum local relevance: semantic score plus bounded lexical overlap (0–1). */
     scoreThreshold: number;
     /** Per-memory content character cap. */
     maxContentChars: number;

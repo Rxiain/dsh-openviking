@@ -1,9 +1,9 @@
 /**
- * rc.6-compatible settings scope for the openviking web card.
+ * Version-tolerant settings scope for the openviking web card.
  *
  * The official settings scope answers "unavailable" for every third-party
- * namespace on rc.6 hosts (the apiproxy allowlist is hard-coded), which would
- * turn the card into a read-only explanation. This module wraps the official
+ * namespace on pre-0.1.2 hosts (the apiproxy allowlist is hard-coded there),
+ * which would turn the card into a read-only explanation. This module wraps
  * scope: when it reports the namespace ready, the wrapper is a pass-through;
  * when it reports unavailable on a loopback connection, a bridge controller
  * takes over and serves the same SettingsScope contract from the host-side
@@ -15,7 +15,8 @@
  * saves atomically when the bridge is the active transport; the official
  * path writes per-field (its writes are out of our reach).
  */
-import type { SettingsScope, SettingsScopeSnapshot, SettingsScopeSpec } from "@deepseek-ai/dsh-client-runtime/client";
+import type { SettingsScope, SettingsScopeSnapshot, SettingsScopeSpec } from "@deepseek-ai/dsh-client-ui-settings/client";
+import type { SettingsPathOpView } from "@deepseek-ai/dsh-api-remotes/client";
 import { OPENVIKING_SETTINGS_BRIDGE_PREFIX } from "../bridge-protocol.js";
 import type { BridgeDescribeResult, BridgeMutateRequest, BridgeMutateResult, BridgeNamespaceView } from "../bridge-protocol.js";
 
@@ -77,39 +78,9 @@ export interface BridgeSettingsFace {
   };
 }
 
-/** One durable write a batched scope mutation performs. */
-export interface BridgeBatchOp {
-  field: string;
-  op: "set" | "unset";
-  value?: unknown;
-}
-
-/** Per-field outcome of one batched scope mutation. */
-export interface BridgeBatchFieldResult {
-  field: string;
-  landed: boolean;
-}
-
-/** Result of one batched scope mutation. */
-export interface BridgeBatchResult {
-  /** Whether the whole mutate was accepted. */
-  ok: boolean;
-  /** Per-field success, in the request order (always present when ok). */
-  fields: BridgeBatchFieldResult[];
-  /** Host rejection code (mutate refused). */
-  code?: string;
-  /** Host rejection message (mutate refused). */
-  message?: string;
-}
-
-/** The optional batch surface the bridge scope adds over the SettingsScope contract. */
-export interface BatchedSettingsScope {
-  /** One atomic mutation of every planned write; present only on the bridge path. */
-  mutate?(writes: BridgeBatchOp[]): Promise<BridgeBatchResult>;
-}
-
-/** The compat scope contract the card consumes. */
-export type CompatSettingsScope<T> = SettingsScope<T> & { load(): Promise<void> } & BatchedSettingsScope;
+/** The compat scope contract the card consumes: the official scope plus an
+ * explicit refresh (the official controller no longer exposes `load`). */
+export type CompatSettingsScope<T> = SettingsScope<T> & { load(): Promise<void> };
 
 /** One settled bridge POST, always shaped as an RPC result envelope. */
 type EnvelopedResult = { result: BridgeDescribeResult | BridgeMutateResult };
@@ -159,7 +130,7 @@ interface BridgeWrite {
  * re-running the wire-schema validation: the seam already validated it, and
  * the card binds without a narrowing decoder.
  */
-class BridgeScopeController<T> implements SettingsScope<T>, BatchedSettingsScope {
+class BridgeScopeController<T> implements SettingsScope<T> {
   private readonly store: SnapshotStore<SettingsScopeSnapshot<T>>;
   private tail: Promise<unknown> = Promise.resolve();
   private disposed = false;
@@ -201,59 +172,36 @@ class BridgeScopeController<T> implements SettingsScope<T>, BatchedSettingsScope
   }
 
   /**
-   * Apply every write in one mutation (the card's atomic save path). Per-field
-   * success is read from the fresh view so a field the Host silently failed to
-   * hold is not cleared on the card.
-   * @param writes - the durable writes, in order.
-   * @returns the batch outcome.
+   * Queue one atomic namespace mutation. All operations share one revision
+   * fence and one recovery read, matching the official controller: a refused
+   * or failed write reloads Host state instead of throwing, so the card
+   * learns what landed from the snapshot it reads back.
+   * @param ops - ordered field operations, copied when queued.
+   * @param expectedRevision - optional fixed revision fencing this write.
    */
-  async mutate(writes: BridgeBatchOp[]): Promise<BridgeBatchResult> {
-    if (writes.length === 0) return { ok: true, fields: [] };
-    const result = await this.postMutate(
-      writes.map((write) =>
-        write.op === "set"
-          ? { op: "set" as const, path: [write.field], value: write.value }
-          : { op: "unset" as const, path: [write.field] },
-      ),
+  mutate(ops: readonly SettingsPathOpView[], expectedRevision?: number): Promise<void> {
+    if (ops.length === 0) return Promise.resolve();
+    const writes: BridgeWrite[] = ops.map((op) =>
+      op.op === "set" ? { op: "set", path: [...op.path], value: op.value } : { op: "unset", path: [...op.path] },
     );
-    if (!result.ok) {
-      await this.load();
-      return {
-        ok: false,
-        fields: [],
-        ...(result.code !== undefined ? { code: result.code } : {}),
-        ...(result.message !== undefined ? { message: result.message } : {}),
-      };
-    }
-    this.accept(result.view);
-    const view = this.getSnapshot();
-    return {
-      ok: true,
-      fields: writes.map((write) => ({
-        field: write.field,
-        landed: this.landed(view, write),
-      })),
-    };
-  }
-
-  /** Whether the fresh user layer holds (or, for unset, no longer holds) the write. */
-  private landed(view: SettingsScopeSnapshot<T>, write: BridgeBatchOp): boolean {
-    const user = view.user as Record<string, unknown> | undefined;
-    if (write.op === "unset") return user === undefined || !Object.hasOwn(user, write.field);
-    return user !== undefined && user[write.field] === write.value;
+    return this.enqueue(async () => {
+      const revision = expectedRevision ?? this.getSnapshot().revision;
+      const result = await this.postMutate(writes, revision);
+      if (result.ok) this.accept(result.view);
+      else await this.read();
+    });
   }
 
   private write(op: BridgeWrite): Promise<void> {
     return this.enqueue(async () => {
-      const result = await this.postMutate([op]);
+      const result = await this.postMutate([op], this.getSnapshot().revision);
       if (result.ok) this.accept(result.view);
       else await this.read();
     });
   }
 
   /** One revision-fenced mutate POST, collapsing transport failures into a refusal. */
-  private async postMutate(ops: BridgeWrite[]): Promise<{ ok: true; view: BridgeNamespaceView } | { ok: false; code?: string; message?: string }> {
-    const revision = this.getSnapshot().revision;
+  private async postMutate(ops: BridgeWrite[], revision: number | undefined): Promise<{ ok: true; view: BridgeNamespaceView } | { ok: false; code?: string; message?: string }> {
     let response: EnvelopedResult;
     try {
       response = await this.api.settings.mutate({
@@ -385,14 +333,8 @@ export function createCompatScope<T>(options: CompatScopeOptions<T>): CompatSett
       const withLoad = primary as SettingsScope<T> & { load?(): Promise<void> };
       if (typeof withLoad.load === "function") await withLoad.load();
     },
-    // The batch surface exists only while the bridge controller is the active
-    // transport; the official scope path still writes per-field. A getter
-    // keeps the capability decision at call time instead of freezing it when
-    // the wrapper is built.
-    get mutate() {
-      const backend = active();
-      if (fallback !== undefined && backend === fallback) return fallback.mutate.bind(fallback);
-      return undefined;
-    },
+    // Atomic writes work on both transports now that the official scope grew
+    // its own `mutate`; the call-time backend decision stays dynamic.
+    mutate: (ops, expectedRevision) => active().mutate(ops, expectedRevision),
   };
 }

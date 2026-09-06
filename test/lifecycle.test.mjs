@@ -234,7 +234,7 @@ test("mount registers ten tools, refreshes context, adopts agents idempotently, 
     content: [{ type: "text", text: "live append" }],
     source: { kind: "user" },
   }, { surfaceOp: "append" });
-  ctx.emit("session/event", postAgent.session, postAgent.session.events.at(-1));
+  ctx.emit("session/event", postAgent.session, postAgent.session.snapshotEvents().at(-1));
   await waitFor(
     () => server.requests.filter((r) => r.url === "/api/v1/sessions/post-agent/messages").length === 2,
     { description: "live session event drain" },
@@ -291,7 +291,7 @@ test("autoCommit disabled causes no automatic commit requests", async (t) => {
     content: [{ type: "text", text: "second message" }],
     source: { kind: "user" },
   }, { surfaceOp: "append" });
-  ctx.emit("session/event", agent.session, agent.session.events.at(-1));
+  ctx.emit("session/event", agent.session, agent.session.snapshotEvents().at(-1));
   await waitFor(
     () => server.requests.filter((r) => r.url === "/api/v1/sessions/no-commit-agent/messages").length === 2,
     { description: "second no-auto-commit agent drain" },

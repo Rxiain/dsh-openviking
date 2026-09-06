@@ -15,9 +15,9 @@
  * runs many tool steps — and an empty result costs exactly one search, not
  * one per step.
  *
- * Ranking is ported from the reference package (preference/temporal
- * weighting, leaf priority, URI/abstract dedupe, score threshold, per-item
- * char cap and `tokenBudget * 4` char budget). Both
+ * Ranking combines the OpenViking semantic score with bounded lexical
+ * overlap, preference/temporal weighting, URI/abstract dedupe, a local
+ * relevance threshold, per-item char cap and `tokenBudget * 4` char budget.
  * `viking://user/memories/` and the agent space (`viking://agent/`, opt-out
  * via `agentSpaces`) are searched, so preferences/entities/events and
  * cases/patterns/tools/skills memories and shared skill playbooks all
@@ -204,9 +204,10 @@ export function createMemoryRecall(
     return load;
   }
 
-  function hasRenderableLeaf(items: SearchItem[], scoreThreshold: number): boolean {
+  function hasRenderableLeaf(items: SearchItem[], queryText: string, scoreThreshold: number): boolean {
+    const query = buildRecallQueryProfile(queryText);
     return items.some(
-      (item) => isLeafLikeMemory(item) && hasMemoryText(item) && recallClampScore(item.score) >= scoreThreshold,
+      (item) => isLeafLikeMemory(item) && hasMemoryText(item) && localRelevanceScore(item, query) >= scoreThreshold,
     );
   }
 
@@ -290,10 +291,13 @@ export function createMemoryRecall(
     let procedureTimedOut = 0;
     const queryText = query.slice(0, AUTO_RECALL_QUERY_CHARS);
     try {
+      // Fetch a bounded candidate pool without server-side score filtering.
+      // Local ranking combines semantic score with lexical overlap, allowing
+      // exact project terms to qualify without hard-coded identifier shapes.
       const searches = [
-        client.find({ query: queryText, targetUri: "viking://user/memories/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: config.scoreThreshold, signal }),
+        client.find({ query: queryText, targetUri: "viking://user/memories/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: 0, signal }),
         ...(config.agentSpaces
-          ? [client.find({ query: queryText, targetUri: "viking://agent/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: config.scoreThreshold, signal })]
+          ? [client.find({ query: queryText, targetUri: "viking://agent/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: 0, signal })]
           : []),
       ];
       const settled = await Promise.allSettled(searches);
@@ -314,7 +318,7 @@ export function createMemoryRecall(
           logger.warn("auto recall space search failed; skipping that space", { endpoint: client.endpoint, error: message });
         }
       }
-      const needsBranchFallback = userResults.some(hasEmptyBranch) && !hasRenderableLeaf(userResults, config.scoreThreshold);
+      const needsBranchFallback = userResults.some(hasEmptyBranch) && !hasRenderableLeaf(userResults, query, config.scoreThreshold);
       if (procedural || needsBranchFallback) {
         const branches = await discoverMemoryBranches(procedural, signal);
         procedureBranches = procedural ? branches.length : 0;
@@ -333,7 +337,7 @@ export function createMemoryRecall(
               controller.abort();
             }, AUTO_RECALL_BRANCH_TIMEOUT_MS);
             try {
-              return await client.find({ query: queryText, targetUri, limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: config.scoreThreshold, signal: controller.signal });
+              return await client.find({ query: queryText, targetUri, limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: 0, signal: controller.signal });
             } catch (error) {
               if (timedOut) throw Object.assign(new Error("procedure branch timed out"), { procedureTimeout: true });
               throw error;
@@ -533,6 +537,7 @@ function contentToText(content: readonly { type?: unknown; text?: unknown }[]): 
     .join(" ");
 }
 
+
 // ─── ranking (ported from the reference package) ────────────────────────
 
 interface RecallProfile {
@@ -607,6 +612,11 @@ function isEventOrCaseMemory(item: SearchItem): boolean {
   const uri = (item.uri ?? "").toLowerCase();
   return category === "events" || category === "cases" || uri.includes("/events/") || uri.includes("/cases/");
 }
+function localRelevanceScore(item: SearchItem, query: RecallProfile): number {
+  const searchableText = `${item.uri ?? ""} ${item.title ?? ""} ${item.abstract ?? item.overview ?? item.content ?? ""}`;
+  return recallClampScore(item.score) + lexicalOverlapBoost(query.tokens, searchableText);
+}
+
 
 function getMemoryDedupeKey(item: SearchItem): string {
   const abstract = normalizeDedupeText(item.abstract ?? item.overview ?? "");
@@ -634,21 +644,11 @@ function pickMemoriesForInjection(
     deduped.push(item);
   }
 
-  const leaves = deduped.filter(
-    (item) => isLeafLikeMemory(item) && recallClampScore(item.score) >= scoreThreshold,
-
-  );
-
-  const picked = [...leaves];
-  const used = new Set(leaves.map((item) => item.uri));
-  for (const item of deduped) {
-    if (picked.length >= limit) break;
-    if (used.has(item.uri)) continue;
-    if (recallClampScore(item.score) < scoreThreshold) continue;
-    picked.push(item);
-  }
-  return picked;
+  return deduped
+    .filter((item) => localRelevanceScore(item, query) >= scoreThreshold)
+    .slice(0, limit);
 }
+
 function selectRecallLanes(procedure: SearchItem[], general: SearchItem[], limit: number): SearchItem[] {
   if (limit <= 0) return [];
   const selected: SearchItem[] = [];

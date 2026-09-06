@@ -3,9 +3,10 @@
  * actually reads. Response fields that are passed through untouched stay
  * `JsonValue` so the plugin never fabricates a complete service schema.
  */
-import type { JsonValue } from "@deepseek-ai/dsh-session";
+/** Any lossless JSON value (defined locally: no host package exports it since 0.1.2). */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-/** Any lossless JSON value (re-exported for consumer ergonomics). */
+/** Any lossless JSON value (defined locally for consumer ergonomics). */
 export type Json = JsonValue;
 
 /** One normalized error from the OpenViking wrapper (`status: "error"`). */

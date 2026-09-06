@@ -19,7 +19,7 @@ overrides go in the profile's own patch as a **complete** restatement.
 | `repoContext.cacheTtlMs` | `60000` | Repository-list cache TTL; `1000`–`3600000` |
 | `autoRecall.enabled` | `true` | Inject relevant memories before each model step |
 | `autoRecall.limit` | `6` | Max memories injected per step; `1`–`50` |
-| `autoRecall.scoreThreshold` | `0.15` | Minimum score for filler memories; `0`–`1` |
+| `autoRecall.scoreThreshold` | `0.15` | Minimum local relevance score: OpenViking semantic score plus bounded lexical overlap with the query; `0`–`1` |
 | `autoRecall.maxContentChars` | `500` | Per-memory content cap; `100`–`5000` |
 | `autoRecall.tokenBudget` | `2000` | Injection budget ≈ `tokenBudget * 4` chars; `100`–`10000` |
 | `autoRecall.agentSpaces` | `true` | Also search the agent space (`viking://agent/`) so cases/patterns/tools/skills memories and shared skill playbooks are recalled, not just user-space preferences/entities/events |
@@ -122,7 +122,7 @@ The card is the plugin's browser half (`dsh.client` + `exports["./client"]`,
 built to `lib/client-ui.js`); the host serves it at
 `/plugins/dsh-openviking/client.js` in the web profile.
 
-**Exposure.** The rc.6 host-apiproxy only serves settings namespaces on an
+**Exposure.** Pre-0.1.2 host-apiproxies only serve settings namespaces on an
 explicit hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`), so the plugin
 ships a loopback-only settings bridge (`src/settings-bridge.ts`) instead:
 when the web card binds the `openviking` namespace and the official scope

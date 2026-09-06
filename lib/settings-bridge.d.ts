@@ -1,7 +1,7 @@
 /**
  * Loopback settings bridge for the `openviking` namespace.
  *
- * rc.6 host-apiproxy serves only its hard-coded settings allowlist
+ * Pre-0.1.2 host-apiproxy serves only its hard-coded settings allowlist
  * (WEB_SETTINGS_NAMESPACES), so every third-party namespace answers
  * "settings-not-exposed" at the RPC boundary and the web card can only
  * explain the gap. This bridge re-serves the openviking namespace through

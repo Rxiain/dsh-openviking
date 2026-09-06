@@ -15,9 +15,9 @@
  * runs many tool steps — and an empty result costs exactly one search, not
  * one per step.
  *
- * Ranking is ported from the reference package (preference/temporal
- * weighting, leaf priority, URI/abstract dedupe, score threshold, per-item
- * char cap and `tokenBudget * 4` char budget). Both
+ * Ranking combines the OpenViking semantic score with bounded lexical
+ * overlap, preference/temporal weighting, URI/abstract dedupe, a local
+ * relevance threshold, per-item char cap and `tokenBudget * 4` char budget.
  * `viking://user/memories/` and the agent space (`viking://agent/`, opt-out
  * via `agentSpaces`) are searched, so preferences/entities/events and
  * cases/patterns/tools/skills memories and shared skill playbooks all

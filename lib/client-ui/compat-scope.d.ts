@@ -1,9 +1,9 @@
 /**
- * rc.6-compatible settings scope for the openviking web card.
+ * Version-tolerant settings scope for the openviking web card.
  *
  * The official settings scope answers "unavailable" for every third-party
- * namespace on rc.6 hosts (the apiproxy allowlist is hard-coded), which would
- * turn the card into a read-only explanation. This module wraps the official
+ * namespace on pre-0.1.2 hosts (the apiproxy allowlist is hard-coded there),
+ * which would turn the card into a read-only explanation. This module wraps
  * scope: when it reports the namespace ready, the wrapper is a pass-through;
  * when it reports unavailable on a loopback connection, a bridge controller
  * takes over and serves the same SettingsScope contract from the host-side
@@ -15,7 +15,7 @@
  * saves atomically when the bridge is the active transport; the official
  * path writes per-field (its writes are out of our reach).
  */
-import type { SettingsScope } from "@deepseek-ai/dsh-client-runtime/client";
+import type { SettingsScope } from "@deepseek-ai/dsh-client-ui-settings/client";
 import type { BridgeDescribeResult, BridgeMutateRequest, BridgeMutateResult } from "../bridge-protocol.js";
 /** The settings wire face the bridge controller consumes. */
 export interface BridgeSettingsFace {
@@ -28,37 +28,11 @@ export interface BridgeSettingsFace {
         }>;
     };
 }
-/** One durable write a batched scope mutation performs. */
-export interface BridgeBatchOp {
-    field: string;
-    op: "set" | "unset";
-    value?: unknown;
-}
-/** Per-field outcome of one batched scope mutation. */
-export interface BridgeBatchFieldResult {
-    field: string;
-    landed: boolean;
-}
-/** Result of one batched scope mutation. */
-export interface BridgeBatchResult {
-    /** Whether the whole mutate was accepted. */
-    ok: boolean;
-    /** Per-field success, in the request order (always present when ok). */
-    fields: BridgeBatchFieldResult[];
-    /** Host rejection code (mutate refused). */
-    code?: string;
-    /** Host rejection message (mutate refused). */
-    message?: string;
-}
-/** The optional batch surface the bridge scope adds over the SettingsScope contract. */
-export interface BatchedSettingsScope {
-    /** One atomic mutation of every planned write; present only on the bridge path. */
-    mutate?(writes: BridgeBatchOp[]): Promise<BridgeBatchResult>;
-}
-/** The compat scope contract the card consumes. */
+/** The compat scope contract the card consumes: the official scope plus an
+ * explicit refresh (the official controller no longer exposes `load`). */
 export type CompatSettingsScope<T> = SettingsScope<T> & {
     load(): Promise<void>;
-} & BatchedSettingsScope;
+};
 /**
  * Build the fetch-backed settings face for the bridge routes. Network and
  * HTTP failures collapse into an ok:false envelope so the controller keeps

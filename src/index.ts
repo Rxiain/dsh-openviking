@@ -15,7 +15,7 @@
  */
 import z from "@deepseek-ai/schemastery";
 import type { Context } from "@deepseek-ai/cordis";
-import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import type {} from "@deepseek-ai/dsh-settings"; // loads the `ctx.settings` service type augmentation
 import { makeBridgeRoutes } from "./settings-bridge.js";
 import { createUserMessage } from "@deepseek-ai/dsh-llm/message";
 import { OpenVikingClient } from "./client.js";
@@ -32,7 +32,7 @@ export const name = "openviking";
 export const inject = ["tools", "fs", "systemPrompt", "agents"];
 
 /** User-settings namespace carrying this plugin's configuration. */
-export const SETTINGS_NAMESPACE = settingsNamespace("openviking");
+export const SETTINGS_NAMESPACE = "openviking";
 
 export interface RepoContextConfig {
   /** Inject the indexed-repository list into the system prompt. */
@@ -46,8 +46,9 @@ export interface AutoRecallConfig {
   enabled: boolean;
   /** Maximum memories injected per step. */
   limit: number;
-  /** Minimum score for non-leaf filler memories (0–1). */
+  /** Minimum local relevance: semantic score plus bounded lexical overlap (0–1). */
   scoreThreshold: number;
+
   /** Per-memory content character cap. */
   maxContentChars: number;
   /** Approximate token budget; the injected block is capped at `tokenBudget * 4` chars. */
@@ -194,29 +195,32 @@ export function apply(ctx: Context, config: Config): void {
   const recall = createMemoryRecall(ctx, client, () => current().autoRecall);
 
   // Optional-settings consumer wiring: register the `openviking` namespace
-  // with this entry as its base layer. No-op when no settings service is
-  // mounted (tests, minimal compositions). `validate` refuses a save whose
-  // resolved endpoint is not an absolute http(s) URL at the seam boundary.
-  installSettingsSection(ctx, SETTINGS_NAMESPACE, Config, config, {
-    setSource: (next) => {
-      current = next;
-    },
-    onChange: () => {
-      const cfg = current();
-      client.reconfigure({
-        endpoint: cfg.endpoint,
-        apiKey: cfg.apiKey,
-        account: cfg.account,
-        user: cfg.user,
-        agentId: cfg.agentId,
-        timeoutMs: cfg.timeoutMs,
-      });
-      sessionManager.reconfigure(sessionSyncConfigOf(cfg));
-    },
-    validate: (value) => assertValidEndpoint(value.endpoint),
+  // with this entry as its base layer. Deferred through the nested inject so
+  // it is a no-op when no settings service is mounted (tests, minimal
+  // compositions). `validate` refuses a save whose resolved endpoint is not
+  // an absolute http(s) URL at the seam boundary.
+  ctx.inject(["settings"], (sctx) => {
+    sctx.settings.installSection(ctx, "openviking", Config, config, {
+      setSource: (next) => {
+        current = next;
+      },
+      onChange: () => {
+        const cfg = current();
+        client.reconfigure({
+          endpoint: cfg.endpoint,
+          apiKey: cfg.apiKey,
+          account: cfg.account,
+          user: cfg.user,
+          agentId: cfg.agentId,
+          timeoutMs: cfg.timeoutMs,
+        });
+        sessionManager.reconfigure(sessionSyncConfigOf(cfg));
+      },
+      validate: (value) => assertValidEndpoint(value.endpoint),
+    });
   });
 
-  // Loopback settings bridge: the rc.6 host-apiproxy refuses third-party
+  // Loopback settings bridge: pre-0.1.2 host-apiproxies refuse third-party
   // namespaces at the RPC boundary, so this deployment re-serves the
   // openviking section through the host settings seam on same-origin,
   // loopback-only routes for the web card. Mounted only when a settings

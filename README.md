@@ -93,7 +93,7 @@ dsh --profile <name>
       enabled: true
       # 每回合最多注入的记忆条数，范围 1–50
       limit: 6
-      # 补充记忆的最低分数，范围 0–1
+      # 本地综合相关性最低分（语义分 + 有界词法重合），范围 0–1
       scoreThreshold: 0.15
       # 单条记忆内容上限（字符），范围 100–5000
       maxContentChars: 500

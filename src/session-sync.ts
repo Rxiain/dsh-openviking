@@ -370,7 +370,7 @@ export class SessionManager {
   async drainAgentNow(agent: Agent, signal?: AbortSignal): Promise<void> {
     const key = String(agent.id);
     const state = this.stateFor(key);
-    for (const event of agent.session.events) {
+    for (const event of agent.session.snapshotEvents()) {
       if (!isEligibleEvent(event)) continue;
       const id = messageIdOf(event);
       if (!id) continue;

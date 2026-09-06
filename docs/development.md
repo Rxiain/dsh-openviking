@@ -47,7 +47,7 @@ the web profile's client-module registry serves the bundle at
 
 Host exposure is the only harness-side requirement: the installed
 `@deepseek-ai/dsh-host-apiproxy` gates which settings namespaces reach the
-browser (`WEB_SETTINGS_NAMESPACES`, hard-coded in rc.6). The plugin ships a
+browser (`WEB_SETTINGS_NAMESPACES`, hard-coded pre-0.1.2). The plugin ships a
 loopback-only settings bridge instead of patching anything:
 
 - `src/bridge-protocol.ts` — dependency-free protocol shared by both halves

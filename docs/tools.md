@@ -69,9 +69,14 @@ and emit one deduplicated warning.
 Before each model step, the latest user text searches both
 `viking://user/memories/` (preferences/entities/events) and the agent space
 `viking://agent/` (cases/patterns/tools/skills memories and shared skill
-playbooks; opt-out via `autoRecall.agentSpaces`); results are ranked,
-deduplicated, score-filtered, and budget-capped into a `<relevant-memories>`
-block. Recall is deduplicated per user message: one search + one injection
+playbooks; opt-out via `autoRecall.agentSpaces`). Each bounded search requests
+the candidate pool without a server-side score cutoff; local ranking then
+combines the OpenViking semantic score with bounded lexical overlap against
+the query, deduplicates results, applies `autoRecall.scoreThreshold`, and
+budget-caps the selected entries into a `<relevant-memories>` block. This
+lets arbitrary exact project terms recover a weak semantic match without
+hard-coded identifier formats, while equally weak unrelated results remain
+filtered. Recall is deduplicated per user message: one search + one injection
 per message, later tool steps of the same message neither re-search nor
 re-inject. For long tasks, `autoRecall.refreshSteps` (default 10) re-searches
 mid-message every N steps and injects only memories that were not shown
@@ -100,14 +105,14 @@ leaf branches of the cached user-memory tree. A branch is procedure-bearing
 when its normalized path contains a stable marker such as `方法论`,
 `方法`, `流程`, `playbook`, `method(s)`, `pattern(s)`, `case(s)`,
 `runbook`, `workflow(s)`, or `skill(s)` — marker presence only decides lane
-eligibility; the branch-local OpenViking semantic score remains the
-relevance authority. Retrieval is bounded and cancellation-aware:
+eligibility. Branch candidates use the same local semantic-plus-lexical
+relevance gate as global candidates. Retrieval is bounded and cancellation-aware:
 
 - branch discovery reads the cached tree (`viking://user/memories/`, up to
   200 nodes, 3 levels, TTL 5 minutes) and keeps at most 16 branches, longest
   path first;
 - each branch search gets a 3-second deadline and shares the existing search
-  limit (20) and score threshold (`autoRecall.scoreThreshold`);
+  limit (20) and local relevance threshold (`autoRecall.scoreThreshold`);
 - a branch that times out, fails, or is cancelled degrades to the remaining
   candidates — a procedure failure never fails the model request.
 

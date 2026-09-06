@@ -99,7 +99,7 @@ the **complete** config under `id: openviking` in your profile's
       enabled: true
       # Max memories injected per turn; 1–50
       limit: 6
-      # Minimum score for filler memories; 0–1
+      # Minimum local relevance (semantic score + bounded lexical overlap); 0–1
       scoreThreshold: 0.15
       # Per-memory content cap in chars; 100–5000
       maxContentChars: 500

@@ -17,7 +17,15 @@
  * loader format (`window.__ModuleLoader__.load`) and served by the host's
  * client-module registry at `/plugins/dsh-openviking/client.js`.
  */
-import type { ClientContext } from "@deepseek-ai/dsh-client-runtime/client";
+import type { Context as ClientContext } from "@deepseek-ai/cordis";
+// Type-only: pull the browser Context merges (ctx.locale, ctx.settingsScope,
+// ctx.slots, ctx.remote, and the connection-reset event) into this program.
+// Cross-plugin collaboration goes through services, never value imports.
+import type {} from "@deepseek-ai/dsh-client-locale/client";
+import type {} from "@deepseek-ai/dsh-client-ui-settings/client";
+import type {} from "@deepseek-ai/dsh-client-ui-renderer/client";
+import type {} from "@deepseek-ai/dsh-api-remotes/client";
+import type {} from "@deepseek-ai/dsh-client-connection/client";
 // Value import emitted as a loader require(); the app shell statically
 // registers dsh-client-ui-primitives in every composition that renders the
 // plugin settings section.
@@ -29,11 +37,12 @@ import type { Translate } from "@deepseek-ai/dsh-client-ui-slots";
 // Type-only import that fixes the runtime SlotMap contract into the compile:
 // dsh-client-ui-settings-plugins owns the `settings.plugin.item` slot (keyed by
 // the settings namespace it edits), so pulling its types makes `register` accept
-// `key` and reject a bare `id` — matching the rc.7 client slot runtime.
+// `key` and reject a bare `id` — matching the 0.1.2 client slot runtime.
 import type { SettingsPluginItemOwnerProps } from "@deepseek-ai/dsh-client-ui-settings-plugins/client";
 import type { ComponentType, ReactNode } from "react";
 import { useSyncExternalStore, useState } from "react";
-import { createCompatScope, type BridgeBatchOp, type CompatSettingsScope } from "./client-ui/compat-scope.js";
+import type { SettingsPathOpView } from "@deepseek-ai/dsh-api-remotes/client";
+import { createCompatScope, type CompatSettingsScope } from "./client-ui/compat-scope.js";
 
 // ─── slot + locale type contract ────────────────────────────────────────
 // The `settings.plugin.item` slot is keyed by the settings namespace each
@@ -138,8 +147,8 @@ const en: Record<OpenVikingDictKey, string> = {
   fieldRecallEnabledHint: "Search relevant memories before each model step.",
   fieldRecallLimit: "Memories per step",
   fieldRecallLimitHint: "Maximum memories injected per step (1–50).",
-  fieldScoreThreshold: "Minimum score",
-  fieldScoreThresholdHint: "Non-leaf filler memories below this score are dropped (0–1).",
+  fieldScoreThreshold: "Minimum local relevance",
+  fieldScoreThresholdHint: "Semantic score plus bounded lexical overlap; weaker unrelated memories are dropped (0–1).",
   fieldMaxContentChars: "Memory content cap (chars)",
   fieldMaxContentCharsHint: "Per-memory content character cap (100–5000).",
   fieldTokenBudget: "Token budget",
@@ -199,8 +208,8 @@ const zh: Record<OpenVikingDictKey, string> = {
   fieldRecallEnabledHint: "每个模型步骤前检索相关记忆。",
   fieldRecallLimit: "每步记忆条数",
   fieldRecallLimitHint: "每步最多注入的记忆条数（1–50）。",
-  fieldScoreThreshold: "最低分数",
-  fieldScoreThresholdHint: "低于该分数的非叶填充记忆被丢弃（0–1）。",
+  fieldScoreThreshold: "最低本地相关性",
+  fieldScoreThresholdHint: "语义分加有界词法重合；较弱且无关的记忆会被丢弃（0–1）。",
   fieldMaxContentChars: "单条记忆上限（字符）",
   fieldMaxContentCharsHint: "单条记忆内容字符上限（100–5000）。",
   fieldTokenBudget: "Token 预算",
@@ -355,15 +364,12 @@ class OpenVikingCardController {
     // scope: forwarded settings-document updates and connection resets.
     ctx.effect(() => {
       const disposers: Array<() => void> = [];
-      const remote = ctx.get("remote") as { $on: (event: string, callback: (namespace?: unknown) => void) => () => void } | undefined;
-      if (remote !== undefined) {
-        disposers.push(
-          remote.$on("settings/document-updated", (namespace) => {
-            if (namespace !== undefined && namespace !== NS) return;
-            void this.scope.load();
-          }),
-        );
-      }
+      disposers.push(
+        ctx.remote.$on("settings/document-updated", (namespace: unknown) => {
+          if (namespace !== undefined && namespace !== NS) return;
+          void this.scope.load();
+        }),
+      );
       disposers.push(
         ctx.on("connection/reset", () => {
           void this.scope.load();
@@ -426,71 +432,52 @@ class OpenVikingCardController {
   /** Write every staged edit, then re-seed from what the Host accepted. */
   async save(): Promise<void> {
     if (this.saving || !this.snapshot.available || !this.snapshot.writable || this.snapshot.invalid) return;
-    const writes: BridgeBatchOp[] = [];
-    const fields = new Set<string>();
+    const planned: Array<{ field: FieldDef; staged: Staged }> = [];
     for (const [fieldKey, staged] of this.staged) {
       const field = FIELD_BY_KEY.get(fieldKey);
       if (!field) continue;
-      fields.add(fieldKey);
-      if (staged.kind === "text") {
-        if (staged.text === "") writes.push({ field: fieldKey, op: "unset" });
-        else writes.push({ field: fieldKey, op: "set", value: field.kind === "number" ? Number(staged.text) : staged.text });
-      } else if (staged.kind === "clear") {
-        writes.push({ field: fieldKey, op: "unset" });
-      } else {
-        writes.push({ field: fieldKey, op: "set", value: staged.checked });
-      }
+      planned.push({ field, staged });
     }
     this.saving = true;
     this.failed = false;
     this.failedReason = undefined;
     this.publish();
     try {
-      const landed = new Set<string>();
-      let accepted = true;
-      let reason: string | undefined;
-      // The bridge scope batches every write into one mutate; the official
-      // scope path writes per-field. Either way the Host is the only
-      // authority on what landed — the read-back decides per field.
-      const batch = this.scope.mutate;
-      if (batch !== undefined && writes.length > 0) {
-        const result = await batch(writes);
-        accepted = result.ok;
-        reason = result.message;
-        if (result.ok) {
-          for (const field of result.fields) {
-            if (field.landed) landed.add(field.field);
-          }
+      // One atomic mutate with real segment paths: nested fields land nested.
+      // (The old dotted single-segment keys wrote literal "a.b" top-level
+      // keys.) The Host is the only authority on what landed — the read-back
+      // decides per field, and unlanded edits stay staged for correction.
+      const ops: SettingsPathOpView[] = planned.map(({ field, staged }) => {
+        if (staged.kind === "text" && staged.text !== "") {
+          return {
+            op: "set",
+            path: [...field.path],
+            value: field.kind === "number" ? Number(staged.text) : staged.text,
+          };
         }
-      } else {
-        for (const write of writes) {
-          if (write.op === "set") await this.scope.set(write.field, write.value);
-          else await this.scope.unset(write.field);
-          if (this.landed(write)) landed.add(write.field);
-        }
-      }
+        return { op: "unset", path: [...field.path] };
+      });
+      if (ops.length > 0) await this.scope.mutate(ops);
       await this.scope.load();
-      if (accepted) {
-        for (const fieldKey of fields) {
-          if (landed.has(fieldKey)) this.staged.delete(fieldKey);
-        }
-        this.failed = landed.size !== fields.size;
-        this.failedReason = this.failed ? reason : undefined;
-      } else {
-        this.failed = true;
-        this.failedReason = reason;
+      const user = this.scope.getSnapshot().user;
+      for (const { field, staged } of planned) {
+        if (this.landedAt(user, field, staged)) this.staged.delete(pathKey(field.path));
       }
+      this.failed = planned.some(({ field }) => this.staged.has(pathKey(field.path)));
+      this.failedReason = undefined;
     } finally {
       this.saving = false;
       this.publish();
     }
   }
 
-  /** Whether the current user layer holds (or, for unset, no longer holds) the write. */
-  private landed(write: BridgeBatchOp): boolean {
-    const user = this.scope.getSnapshot().user as Record<string, unknown> | undefined;
-    if (write.op === "unset") return user === undefined || !Object.hasOwn(user, write.field);
-    return user !== undefined && user[write.field] === write.value;
+  /** Whether the fresh user layer holds (or, for unset, no longer holds) the write. */
+  private landedAt(user: unknown, field: FieldDef, staged: Staged): boolean {
+    if (staged.kind === "text" && staged.text !== "") {
+      const value = field.kind === "number" ? Number(staged.text) : staged.text;
+      return atPath(user, field.path) === value;
+    }
+    return !hasPath(user, field.path);
   }
 
   // ── projection ────────────────────────────────────────────────────────

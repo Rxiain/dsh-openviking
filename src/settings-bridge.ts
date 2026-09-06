@@ -1,7 +1,7 @@
 /**
  * Loopback settings bridge for the `openviking` namespace.
  *
- * rc.6 host-apiproxy serves only its hard-coded settings allowlist
+ * Pre-0.1.2 host-apiproxy serves only its hard-coded settings allowlist
  * (WEB_SETTINGS_NAMESPACES), so every third-party namespace answers
  * "settings-not-exposed" at the RPC boundary and the web card can only
  * explain the gap. This bridge re-serves the openviking namespace through
@@ -19,7 +19,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { SettingsDescriptor, SettingsNamespace, SettingsProvider } from "@deepseek-ai/dsh-settings";
-import { SettingsConflictError, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { SettingsConflictError } from "@deepseek-ai/dsh-settings";
 import type { WebRoute } from "@deepseek-ai/dsh-host-webserver";
 import { OPENVIKING_SETTINGS_BRIDGE_PREFIX } from "./bridge-protocol.js";
 import type { BridgeDescribeResult, BridgeMutateRequest, BridgeMutateResult, BridgeNamespaceView, BridgeSettingsOp } from "./bridge-protocol.js";
@@ -137,7 +137,7 @@ export function makeBridgeHandlers(deps: BridgeDeps): BridgeHandlers {
       }
       const expectedRevision = typeof body.expectedRevision === "number" ? body.expectedRevision : undefined;
       try {
-        await deps.settings.mutate(settingsNamespace(SERVED_NAMESPACE) as SettingsNamespace, body.ops as unknown as Parameters<SettingsProvider["mutate"]>[1], expectedRevision);
+        await deps.settings.mutate(SERVED_NAMESPACE, body.ops as unknown as Parameters<SettingsProvider["mutate"]>[1], expectedRevision);
       } catch (error) {
         return bridgeFailureOf(error);
       }
