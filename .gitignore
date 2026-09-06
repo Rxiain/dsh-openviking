@@ -8,8 +8,13 @@ banks/
 .dsh_better_edit/
 .learnings/
 .omp/
+.omc/
 .opencode/
 .pi/
+
+# 本地缓存与实验脚手架（不提交）
+.npm-cache/
+koishi/
 
 # Local workflow-generated documentation and planning artifacts
 docs/aegis/
