@@ -18,7 +18,8 @@
  * Ranking combines the OpenViking semantic score with bounded lexical
  * overlap, preference/temporal weighting, URI/abstract dedupe, a local
  * relevance threshold, per-item char cap and `tokenBudget * 4` char budget.
- * `viking://user/memories/` and the agent space (`viking://agent/`, opt-out
+ * The identity-scoped user-memory root (`viking://user/<user>/memories/`,
+ * short-form fallback) and the agent space (`viking://agent/`, opt-out
  * via `agentSpaces`) are searched, so preferences/entities/events and
  * cases/patterns/tools/skills memories and shared skill playbooks all
  * surface; ordinary repository results never get auto-injected.

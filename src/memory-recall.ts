@@ -18,13 +18,15 @@
  * Ranking combines the OpenViking semantic score with bounded lexical
  * overlap, preference/temporal weighting, URI/abstract dedupe, a local
  * relevance threshold, per-item char cap and `tokenBudget * 4` char budget.
- * `viking://user/memories/` and the agent space (`viking://agent/`, opt-out
+ * The identity-scoped user-memory root (`viking://user/<user>/memories/`,
+ * short-form fallback) and the agent space (`viking://agent/`, opt-out
  * via `agentSpaces`) are searched, so preferences/entities/events and
  * cases/patterns/tools/skills memories and shared skill playbooks all
  * surface; ordinary repository results never get auto-injected.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { UserMessage } from "@deepseek-ai/dsh-session";
+import { resolveUserMemoriesRoot } from "./client.js";
 import type { OpenVikingClient } from "./client.js";
 import { isRecord, type SearchItem } from "./types.js";
 
@@ -168,13 +170,15 @@ export function createMemoryRecall(
     if (inflight) return inflight;
     const load = (async () => {
       try {
-        const result = await client.tree({ uri: "viking://user/memories/", nodeLimit: 200, levelLimit: 3, signal });
+        const memoriesRoot = resolveUserMemoriesRoot(client);
+        const memoriesPrefix = memoriesRoot.endsWith("/") ? memoriesRoot.slice(0, -1) : memoriesRoot;
+        const result = await client.tree({ uri: memoriesRoot, nodeLimit: 200, levelLimit: 3, signal });
         const branches = new Set<string>();
         if (Array.isArray(result)) {
           for (const node of result) {
             if (!isRecord(node) || node.isDir !== false || typeof node.uri !== "string") continue;
             const slash = node.uri.lastIndexOf("/");
-            if (slash <= "viking://user/memories".length) continue;
+            if (slash <= memoriesPrefix.length) continue;
             const branch = `${node.uri.slice(0, slash + 1)}`;
             if (!procedureOnly || PROCEDURE_PATH_RE.test(branch)) branches.add(branch);
           }
@@ -295,7 +299,7 @@ export function createMemoryRecall(
       // Local ranking combines semantic score with lexical overlap, allowing
       // exact project terms to qualify without hard-coded identifier shapes.
       const searches = [
-        client.find({ query: queryText, targetUri: "viking://user/memories/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: 0, signal }),
+        client.find({ query: queryText, targetUri: resolveUserMemoriesRoot(client), limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: 0, signal }),
         ...(config.agentSpaces
           ? [client.find({ query: queryText, targetUri: "viking://agent/", limit: AUTO_RECALL_SEARCH_LIMIT, scoreThreshold: 0, signal })]
           : []),

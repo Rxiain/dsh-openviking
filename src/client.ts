@@ -66,6 +66,30 @@ const JSON_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "application/json",
 };
 
+/** Short (legacy/single-tenant) user-memory root, used when no identity is configured. */
+export const USER_MEMORIES_ROOT_FALLBACK = "viking://user/memories/";
+
+/**
+ * Derive the user-memory root for the CURRENT identity.
+ *
+ * Self-hosted servers namespace the user scope (`viking://user/<user>/memories/`)
+ * and reject the short form with `HTTP 400 [INVALID_URI]`; older layouts accept
+ * the short form. `user` wins, `account` is the fallback, empty/unsafe identity
+ * keeps the short form.
+ */
+export function resolveUserMemoriesRoot(identity: { user?: unknown; account?: unknown }): string {
+  const who = String((identity?.user ?? identity?.account ?? "") as unknown).trim();
+  if (!who || who === "." || who === ".." || /[/\\:\s?#]/.test(who)) return USER_MEMORIES_ROOT_FALLBACK;
+  let decoded = who;
+  try {
+    decoded = decodeURIComponent(who);
+  } catch {
+    return USER_MEMORIES_ROOT_FALLBACK;
+  }
+  if (decoded === "." || decoded === ".." || /[/\\:\s?#]/.test(decoded)) return USER_MEMORIES_ROOT_FALLBACK;
+  return `viking://user/${who}/memories/`;
+}
+
 export class OpenVikingClient {
   private options: OpenVikingClientOptions;
 
@@ -82,16 +106,28 @@ export class OpenVikingClient {
     return this.options.apiKey ?? "";
   }
 
-  private get account(): string {
+  /** Configured account identity (also sent as `X-OpenViking-Account`). */
+  get account(): string {
     return this.options.account ?? "";
   }
 
-  private get user(): string {
+  /** Configured user identity (also sent as `X-OpenViking-User`). */
+  get user(): string {
     return this.options.user ?? "";
   }
 
-  private get agentId(): string {
+  get agentId(): string {
     return this.options.agentId ?? "";
+  }
+
+  /** User-memory search/tree root for the CURRENT identity.
+   *
+   * Self-hosted layouts namespace the user scope (`viking://user/<user>/memories/`);
+   * older/single-tenant layouts accept the short form (`viking://user/memories/`).
+   * Keeps the short form as the empty-identity fallback.
+   */
+  userMemoriesRoot(): string {
+    return resolveUserMemoriesRoot({ user: this.user, account: this.account });
   }
 
   private get timeoutMs(): number {

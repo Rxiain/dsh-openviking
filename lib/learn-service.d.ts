@@ -10,7 +10,8 @@
  *                 generates the L1 overview and indexes it).
  *   - `target`  → append to an explicit existing memory file
  *                 (POST /api/v1/content/write, mode append).
- *   - no target → semantic dedupe: search `viking://user/memories/`; when the
+ *   - no target → semantic dedupe: search the identity-scoped user-memory root
+ *                 (`viking://user/<user>/memories/`, short-form fallback); when the
  *                 top hit clears `min_score`, append there; otherwise return
  *                 `no-match` with actionable guidance.
  *

@@ -44,7 +44,8 @@ the model never sees fake `"Error: ..."` success values.
   - `target` → appends to an explicit existing memory file via
     `POST /api/v1/content/write` (the service preserves the `MEMORY_FIELDS`
     metadata block and re-embeds the file).
-  - neither → semantic dedupe: the top `viking://user/memories/` hit at or
+  - neither → semantic dedupe: the top identity-scoped user-memory hit
+    (`viking://user/<user>/memories/`, `viking://user/memories/` fallback) at or
     above `min_score` (default 0.5) is appended to; below threshold or empty
     results return `no-match` with actionable guidance instead of a fake
     write (OpenViking has no create-memory endpoint — new memories come from
@@ -67,7 +68,10 @@ and emit one deduplicated warning.
 ### Auto recall
 
 Before each model step, the latest user text searches both
-`viking://user/memories/` (preferences/entities/events) and the agent space
+the identity-scoped user-memory root (`viking://user/<user>/memories/`,
+`viking://user/memories/` fallback for empty identity; self-hosted layouts
+require the account/user segment and reject the short form with
+`HTTP 400 [INVALID_URI]`) (preferences/entities/events) and the agent space
 `viking://agent/` (cases/patterns/tools/skills memories and shared skill
 playbooks; opt-out via `autoRecall.agentSpaces`). Each bounded search requests
 the candidate pool without a server-side score cutoff; local ranking then
@@ -108,7 +112,7 @@ when its normalized path contains a stable marker such as `方法论`,
 eligibility. Branch candidates use the same local semantic-plus-lexical
 relevance gate as global candidates. Retrieval is bounded and cancellation-aware:
 
-- branch discovery reads the cached tree (`viking://user/memories/`, up to
+- branch discovery reads the cached tree (identity-scoped user-memory root, up to
   200 nodes, 3 levels, TTL 5 minutes) and keeps at most 16 branches, longest
   path first;
 - each branch search gets a 3-second deadline and shares the existing search

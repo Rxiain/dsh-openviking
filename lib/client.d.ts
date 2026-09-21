@@ -32,15 +32,38 @@ export interface RequestOptions {
     /** Overrides the client timeout for this request (e.g. `memadd wait=true`). */
     timeoutMs?: number;
 }
+/** Short (legacy/single-tenant) user-memory root, used when no identity is configured. */
+export declare const USER_MEMORIES_ROOT_FALLBACK = "viking://user/memories/";
+/**
+ * Derive the user-memory root for the CURRENT identity.
+ *
+ * Self-hosted servers namespace the user scope (`viking://user/<user>/memories/`)
+ * and reject the short form with `HTTP 400 [INVALID_URI]`; older layouts accept
+ * the short form. `user` wins, `account` is the fallback, empty/unsafe identity
+ * keeps the short form.
+ */
+export declare function resolveUserMemoriesRoot(identity: {
+    user?: unknown;
+    account?: unknown;
+}): string;
 export declare class OpenVikingClient {
     private options;
     constructor(options: OpenVikingClientOptions);
     /** Normalized service base URL of the CURRENT options (live after reconfigure). */
     get endpoint(): string;
     private get apiKey();
-    private get account();
-    private get user();
-    private get agentId();
+    /** Configured account identity (also sent as `X-OpenViking-Account`). */
+    get account(): string;
+    /** Configured user identity (also sent as `X-OpenViking-User`). */
+    get user(): string;
+    get agentId(): string;
+    /** User-memory search/tree root for the CURRENT identity.
+     *
+     * Self-hosted layouts namespace the user scope (`viking://user/<user>/memories/`);
+     * older/single-tenant layouts accept the short form (`viking://user/memories/`).
+     * Keeps the short form as the empty-identity fallback.
+     */
+    userMemoriesRoot(): string;
     private get timeoutMs();
     /**
      * Swap the request-facing options (endpoint, headers, timeout). Called when
