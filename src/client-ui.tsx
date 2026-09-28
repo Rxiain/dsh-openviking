@@ -29,20 +29,15 @@ import type {} from "@deepseek-ai/dsh-client-connection/client";
 // Value import emitted as a loader require(); the app shell statically
 // registers dsh-client-ui-primitives in every composition that renders the
 // plugin settings section.
-import { IconChevronDownOutline14 } from "@deepseek-ai/dsh-client-ui-primitives";
+import { IconChevronDownOutlineMedium } from "@deepseek-ai/dsh-client-ui-primitives";
 import type { ConnectionHandle } from "@deepseek-ai/dsh-client-connection/client";
-import type { SettingsScopeBinder } from "@deepseek-ai/dsh-client-ui-settings/client";
+import type { ConfigForms, ConfigForm } from "@deepseek-ai/dsh-client-ui-settings/client";
 import type { LocaleRuntime } from "@deepseek-ai/dsh-client-locale/client";
 import type { Translate } from "@deepseek-ai/dsh-client-ui-slots";
-// Type-only import that fixes the runtime SlotMap contract into the compile:
-// dsh-client-ui-settings-plugins owns the `settings.plugin.item` slot (keyed by
-// the settings namespace it edits), so pulling its types makes `register` accept
-// `key` and reject a bare `id` — matching the 0.1.2 client slot runtime.
-import type { SettingsPluginItemOwnerProps } from "@deepseek-ai/dsh-client-ui-settings-plugins/client";
+import type { SettingsPluginsTabOwnerProps } from "@deepseek-ai/dsh-client-ui-settings/client";
 import type { ComponentType, ReactNode } from "react";
 import { useSyncExternalStore, useState } from "react";
 import type { SettingsPathOpView } from "@deepseek-ai/dsh-api-remotes/client";
-import { createCompatScope, type CompatSettingsScope } from "./client-ui/compat-scope.js";
 
 // ─── slot + locale type contract ────────────────────────────────────────
 // The `settings.plugin.item` slot is keyed by the settings namespace each
@@ -343,7 +338,7 @@ interface CardSnapshot {
  * projection published to subscribers.
  */
 class OpenVikingCardController {
-  private readonly scope: CompatSettingsScope<Record<string, unknown>>;
+  private readonly scope: ConfigForm<Record<string, unknown>>;
   private readonly staged = new Map<string, Staged>();
   private readonly listeners = new Set<() => void>();
   private snapshot: CardSnapshot;
@@ -352,33 +347,11 @@ class OpenVikingCardController {
   private failedReason: string | undefined;
 
   constructor(ctx: ClientContext) {
-    const connection = ctx.get("connection") as ConnectionHandle;
-    // Official settings scope first; the bridge fallback takes over only when
-    // the namespace is not exposed to this client on a loopback connection.
-    this.scope = createCompatScope<Record<string, unknown>>({
-      namespace: NS,
-      primary: ctx.settingsScope.bind<Record<string, unknown>>({ namespace: NS }),
-      fetchFn: connection.isLoopback ? ((input, init) => fetch(input, init)) : undefined,
-    });
-    // Bridge refreshes ride the same invalidation edges as the official
-    // scope: forwarded settings-document updates and connection resets.
-    ctx.effect(() => {
-      const disposers: Array<() => void> = [];
-      disposers.push(
-        ctx.remote.$on("settings/document-updated", (namespace: unknown) => {
-          if (namespace !== undefined && namespace !== NS) return;
-          void this.scope.load();
-        }),
-      );
-      disposers.push(
-        ctx.on("connection/reset", () => {
-          void this.scope.load();
-        }),
-      );
-      return () => {
-        for (const dispose of disposers) dispose();
-      };
-    }, "openviking: card scope invalidation");
+    // 0.1.7 `configForms` replaces 0.1.2 `settingsScope`: one ConfigForm per
+    // Host plugin entry, derived from the shared describe mirror. The mirror
+    // refreshes itself on `settings/document-updated` and `connection/reset`,
+    // so this card does not call `load()` — 0.1.7's ConfigForm has none.
+    this.scope = (ctx as ClientContext & { configForms: ConfigForms }).configForms.get<Record<string, unknown>>(NS);
     this.snapshot = this.project();
     this.scope.subscribe(() => this.publish());
   }
@@ -458,7 +431,6 @@ class OpenVikingCardController {
         return { op: "unset", path: [...field.path] };
       });
       if (ops.length > 0) await this.scope.mutate(ops);
-      await this.scope.load();
       const user = this.scope.getSnapshot().user;
       for (const { field, staged } of planned) {
         if (this.landedAt(user, field, staged)) this.staged.delete(pathKey(field.path));
@@ -687,7 +659,7 @@ function OpenVikingCard(props: OpenVikingCardProps): ReactNode {
           <span className="ovk_description">{t("cardDescription")}</span>
         </span>
         {state.dirty ? <span className="ovk_pending">{t("unsaved")}</span> : null}
-        <IconChevronDownOutline14 className={open ? "ovk_chevron ovk_chevronOpen" : "ovk_chevron"} />
+        <IconChevronDownOutlineMedium className={open ? "ovk_chevron ovk_chevronOpen" : "ovk_chevron"} />
       </button>
       {open ? (
         <div className="ovk_body">
@@ -761,7 +733,7 @@ function OpenVikingCard(props: OpenVikingCardProps): ReactNode {
 // ─── plugin entry ───────────────────────────────────────────────────────
 
 /** Required services (cordis fiber inject). */
-export const inject = ["slots", "locale", "connection", "remote", "settingsScope"];
+export const inject = ["slots", "locale", "remote", "configForms"];
 
 /**
  * Mount the OpenViking configuration card.
@@ -770,11 +742,18 @@ export const inject = ["slots", "locale", "connection", "remote", "settingsScope
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register("openviking", { en, zh }), "openviking: card dictionaries");
   const controller = new OpenVikingCardController(ctx);
-  ctx.slots.inject("settings.plugin.item", () =>
+  // DSH 0.1.7+: the plugin card is a list entry on the Plugins settings page
+  // (`settings.plugins.tab` declared by dsh-client-ui-settings-plugins). The
+  // `id` is the tab key, `order` ranks us among siblings, and the thunk label
+  // re-evaluates on locale changes so the tab follows the active language.
+  const tabLabel = (): string => ctx.locale.resolveText({ en: en.cardTitle, zh: zh.cardTitle });
+  ctx.slots.inject("settings.plugins.tab", () =>
     ctx.slots.register(
       {
-        name: "settings.plugin.item",
-        key: "openviking",
+        name: "settings.plugins.tab",
+        id: "openviking",
+        order: 50,
+        label: tabLabel,
         locale: "openviking" as const,
         inject: () => ({ controller }),
       },
