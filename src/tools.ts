@@ -1,9 +1,13 @@
 /**
- * The eleven OpenViking model tools.
+ * The eleven OpenViking model tools (plus an optional team-scoped twelfth).
  *
  * Each tool returns a canonical JSON value (validated against its output
  * schema); `output.render` produces the model-facing text. Infrastructure
  * failures always throw — never a `"Error: ..."` success value.
+ *
+ * Agent Teams helper: `memsearchTeam` is registered only when the host
+ * exposes Agent Teams (see `isAgentTeamsAvailable`). Non-team deployments see
+ * exactly the eleven base tools.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { defineTool, type ToolDefinition } from "@deepseek-ai/dsh-tools";
@@ -147,6 +151,90 @@ interface ToolConfig {
 }
 
 // ─── tool factories ─────────────────────────────────────────────────────
+
+/**
+ * Whether the host exposes Agent Teams (`spawn_teammate` teammates).
+ *
+ * DSH `0.1.7-rc.2` ships no teams service, so this probes defensively: a
+ * `teams` service, or a `spawn_teammate` tool on the tool runtime. Anything
+ * missing (no `get`, threw lookup, absent service) means "no teams" — the
+ * plugin then registers exactly the eleven base tools and the team helper
+ * stays unregistered (no surface for non-team deployments).
+ */
+export function isAgentTeamsAvailable(ctx: unknown): boolean {
+  const get = (ctx as { get?: (name: string) => unknown } | null | undefined)?.get;
+  if (typeof get !== "function") return false;
+  try {
+    if (get.call(ctx, "teams") !== undefined && get.call(ctx, "teams") !== null) return true;
+    const tools = get.call(ctx, "tools") as { get?: (name: string) => unknown } | null | undefined;
+    if (tools !== undefined && tools !== null && typeof tools.get === "function") {
+      return tools.get("spawn_teammate") !== undefined && tools.get("spawn_teammate") !== null;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+// ─── team-scoped recall helper ────────────────────────────────────────
+//
+// Decision (tasks 8.1): a separate `memsearchTeam` tool, not a `--team` flag
+// on `memsearch`. A distinct tool keeps the lead's `memsearch` contract
+// untouched, gets its own model-facing card, and stays fully additive —
+// non-team deployments never see the name. The team session id is an explicit
+// required argument (supplied by the teammate caller); the helper never falls
+// back to the lead's session.
+
+function defineMemsearchTeam(client: OpenVikingClient) {
+  return defineTool({
+    name: "memsearchTeam",
+    description:
+      "Team-scoped OpenViking semantic search for Agent Teams teammates. Searches the team's shared OpenViking session directly (never the lead's session). Use from a teammate subagent to inherit the lead's working context without leaking reads back.",
+    parameters: {
+      query: { type: "string", required: true, description: "Natural language query, question, or task description." },
+      team_session_id: { type: "string", required: true, description: "OpenViking session ID of the team (from the teammate's team membership). Never defaults to the caller's own session." },
+      target_uri: { type: "string", description: "Optional Viking URI scope, e.g. viking://resources/ or viking://user/memories/." },
+      mode: {
+        type: "string",
+        enum: ["auto", "fast", "deep"],
+        description: "auto chooses based on query complexity; fast uses /find; deep uses /search with the team session context.",
+      },
+      limit: { type: "number", description: "Maximum number of results. Defaults to 10." },
+      score_threshold: { type: "number", description: "Optional minimum score threshold." },
+    },
+    output: {
+      schema: searchResultsSchema,
+      render: (_args, value: { mode: string; query: string; memories?: unknown[]; resources?: unknown[]; skills?: unknown[]; total: number; query_plan?: unknown }) =>
+        text(formatSearchResults(value)),
+    },
+    async execute(args, exec) {
+      // Team session only: no `exec.agent` fallback, no `ensureSession` on the
+      // caller's session (that would couple the teammate to the lead's
+      // lifecycle). Explicit team ids are the caller's concern.
+      const sessionId = args.team_session_id;
+      const mode = resolveSearchMode(args.mode, args.query, sessionId);
+      if (mode === "deep") {
+        const result = await client.search({
+          query: args.query,
+          targetUri: args.target_uri,
+          sessionId,
+          limit: args.limit ?? 10,
+          scoreThreshold: args.score_threshold,
+          signal: exec.signal,
+        });
+        return canonicalSearchValue("deep", args.query, result);
+      }
+      const result = await client.find({
+        query: args.query,
+        targetUri: args.target_uri,
+        limit: args.limit ?? 10,
+        scoreThreshold: args.score_threshold,
+        signal: exec.signal,
+      });
+      return canonicalSearchValue("fast", args.query, result);
+    },
+  });
+}
 
 export function createOpenVikingTools(
   ctx: Context,
@@ -552,7 +640,7 @@ export function createOpenVikingTools(
 // `/memlearn` command can never drift in redaction, limits, dedupe, Skill
 // persistence, and error handling. This tool only adapts: it passes the tool
 // arguments as normalized input and defers the learned lesson into the
-// current turn through `exec.deferContext` (source.kind "plugin", so
+// current turn through `exec.deferContext` (source.kind "dsh-openviking", so
 // session-sync never mirrors it back) — a no-turn human command has no
 // deferred injection, which is why `injected` comes from the service.
 
@@ -571,7 +659,7 @@ function deferLearned(
           text: `<learned-${kind} uri="${uri}">\n${text}\n</learned-${kind}>`,
         },
       ],
-      source: { kind: "plugin", plugin: "dsh-openviking" },
+      source: { kind: "dsh-openviking", plugin: "dsh-openviking" },
     }),
   );
 }
@@ -697,6 +785,8 @@ function deferLearned(
   });
 
   const tools = [memsearch, memfind, memread, membrowse, memcommit, memlearn, memgrep, memglob, memadd, memremove, memqueue];
+  // Additive team surface: only when the host actually provides Agent Teams.
+  if (isAgentTeamsAvailable(ctx)) tools.push(defineMemsearchTeam(client) as (typeof tools)[number]);
   return tools;
 }
 

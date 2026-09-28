@@ -537,7 +537,7 @@ test("memlearn skill channel: create vs update, kebab-case validation, secret re
   assert.deepEqual(data.allowed_tools, ["memsearch"]);
   // Deferred context carries the redacted lesson into the current turn.
   assert.equal(exec.deferred.length, 1);
-  assert.equal(exec.deferred[0].source.kind, "plugin");
+  assert.equal(exec.deferred[0].source.kind, "dsh-openviking");
   assert.match(exec.deferred[0].content[0].text, /<learned-skill/);
   assert.ok(!exec.deferred[0].content[0].text.includes("sk-abcdefghijklmnopqrstuvwxyz123456"));
 
@@ -656,4 +656,45 @@ test("memlearn argument guards: empty input and oversized memory are refused", a
     () => byName(tools, "memlearn").execute({ memory: "x".repeat(8_001) }, learnExec()),
     /exceeds/,
   );
+});
+
+test("team helper: non-team hosts see exactly the eleven base tools", async () => {
+  const { tools } = makeTools();
+  assert.equal(tools.length, 11);
+  assert.ok(!tools.some((t) => t.name === "memsearchTeam"), "no team surface without Agent Teams");
+});
+
+test("team helper: memsearchTeam reads the team session directly, never the lead's", async () => {
+  const { client, calls } = stubClient();
+  client.search = (opts) => {
+    calls.push({ name: "search", opts });
+    return Promise.resolve({ memories: [{ uri: "viking://team/m/1" }], resources: [], skills: [], total: 1 });
+  };
+  client.find = (opts) => {
+    calls.push({ name: "find", opts });
+    return Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  };
+  const { tools } = makeTools({ client });
+  const teamCtx = { fs: stubFs().fs, get: (name) => (name === "teams" ? {} : undefined) };
+  const { isAgentTeamsAvailable } = await import("../lib/tools.js");
+  assert.equal(isAgentTeamsAvailable(teamCtx), true);
+  assert.equal(isAgentTeamsAvailable({ fs: {} }), false);
+  const { createOpenVikingTools } = await import("../lib/tools.js");
+  const teamedManager = stubSessionManager();
+  const teamed = createOpenVikingTools(teamCtx, client, teamedManager, { timeoutMs: 30000 });
+  assert.equal(teamed.length, 12);
+  const helper = teamed.find((t) => t.name === "memsearchTeam");
+  assert.ok(helper, "memsearchTeam registered when Agent Teams present");
+
+  // Deep query with an explicit team session: hits the team session id.
+  const leadAgent = { id: "lead-agent" };
+  const value = await helper.execute(
+    { query: "what did the team decide about the rollout plan?", team_session_id: "team-123" },
+    { signal: SIGNAL(), agent: leadAgent },
+  );
+  assert.equal(value.mode, "deep");
+  const searchCall = calls.find((c) => c.name === "search");
+  assert.ok(searchCall, "deep team query uses /search");
+  assert.equal(searchCall.opts.sessionId, "team-123", "team session id used");
+  assert.equal(teamedManager.calls.filter((c) => c.name === "ensureSession").length, 0, "lead session untouched: never ensured");
 });

@@ -18,7 +18,7 @@
  * Secrets are redacted before anything touches the wire. A human command has
  * no model turn, so context injection is optional: only the model-tool path
  * provides an `inject` callback, and only then is the lesson deferred into the
- * current turn (source.kind "plugin", so session-sync never mirrors it back).
+ * current turn (source.kind "dsh-openviking", so session-sync never mirrors it back).
  */
 import type { OpenVikingClient } from "./client.js";
 export declare const MEMLEARN_MAX_MEMORY_CHARS = 8000;

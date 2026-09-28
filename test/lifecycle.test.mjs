@@ -157,7 +157,11 @@ test("compiled artifact exports the canonical plugin shape", async () => {
 test("cordis.patch.yml inserts only the openviking row referencing the package", () => {
   const text = readFileSync(fileURLToPath(new URL("../cordis.patch.yml", import.meta.url)), "utf8");
   assert.match(text, /id: openviking/);
-  assert.match(text, /name: 'dsh-openviking'/);
+  // DSH 0.1.7 Plugin Manager: `name` carries localized title/description (a
+  // map of locale → text) instead of a bare npm-package string.
+  assert.match(text, /name:\s*\n\s*zh: 'OpenViking 记忆'/);
+  assert.match(text, /en: 'OpenViking Memory'/);
+  assert.match(text, /icon: 'data:image\/svg\+xml/);
   assert.ok(!/disabled:\s*true/.test(text), "no base rows disabled");
 });
 
