@@ -2,6 +2,7 @@
 [![Node: ^22.19.0 || >=24.0.0](https://img.shields.io/badge/Node-%5E22.19.0%20%7C%7C%20%3E%3D24.0.0-339933)](package.json)
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6)](https://www.typescriptlang.org/)
 [![DeepSeek Harness](https://img.shields.io/badge/Platform-DeepSeek%20Harness-4B32C3)](https://deepseek-harness.github.io/deepseek-harness/)
+[![DSH: >=0.1.7-rc.2](https://img.shields.io/badge/DSH-%3E%3D0.1.7--rc.2-4B32C3)](package.json)
 [![OpenViking](https://img.shields.io/badge/Service-OpenViking-0052CC)](https://github.com/volcengine/OpenViking)
 
 [简体中文](README.md) | **English**
@@ -57,6 +58,10 @@ When the DSH command registry is available, the plugin also registers a human-in
 | Maintenance | Manual curation | An observer queue does embedding, summarization and content reorganization automatically (`memqueue` shows the status) |
 
 ## Quick start
+
+Recommended: install OpenViking from the Web UI **Plugin Manager** page on
+DSH `0.1.7+` (localized title + icon included). The CLI flows below remain as
+a fallback:
 
 ```sh
 # One-shot install from the GitHub repo (prebuilt lib/ included — no build

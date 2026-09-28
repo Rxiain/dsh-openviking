@@ -102,8 +102,11 @@ There is no plugin-level `enabled` field. Disable the Cordis row:
 
 When the deployment runs the dsh browser UI (`dsh web`), the OpenViking
 settings card appears under **设置 → 插件 → 插件配置**. It edits the same
-fields as this document through the user-settings seam (`settings.yaml` at
-`$DSH_HOME`), layered over the profile's `id: openviking` row:
+fields as this document through the user-settings seam (the host
+`SettingsForms` service over the profile's `id: openviking` row, edited via
+the Web UI and applied through the `settings/document-updated` listener —
+there is no `ctx.settings.installSection(...)` step anymore),
+layered over the profile's `id: openviking` row:
 
 - **schema defaults → profile row (composition base) → user document** —
   fields saved in the UI land in `settings.yaml`; fields not saved there
@@ -122,14 +125,13 @@ The card is the plugin's browser half (`dsh.client` + `exports["./client"]`,
 built to `lib/client-ui.js`); the host serves it at
 `/plugins/dsh-openviking/client.js` in the web profile.
 
-**Exposure.** Pre-0.1.2 host-apiproxies only serve settings namespaces on an
-explicit hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`), so the plugin
-ships a loopback-only settings bridge (`src/settings-bridge.ts`) instead:
-when the web card binds the `openviking` namespace and the official scope
-reports it unavailable, the browser half falls back to two same-origin
-routes (`POST /api/dsh-openviking/describe` and `/mutate`) that re-serve the
-namespace through the host settings seam. The bridge rides `ctx.settings`
-(schema validation, revision fencing, persistence and events for free),
-serves only the plugin's own registered namespace, and refuses anything that
-is not a loopback same-origin POST. No harness patch, no allowlist file, no
-re-run after dsh upgrades or `dsh plugin add|remove`.
+Requires DSH `>= 0.1.7-rc.2` (peer range `^0.1.7-rc.2`): older hosts keep the
+previous `installSection` wiring and refuse the new `Config` schema.
+
+## Plugin Manager
+
+On DSH `0.1.7+` the plugin is also discoverable from the Web UI's
+**Plugin Manager** page: the `cordis.patch.yml` row carries the localized
+`name`/`description` plus the `icon`, and `package.json#icon` with
+`locale/en.json` + `locale/zh.json` (`meta.title`/`meta.description`) supply
+the listing copy — the same title/description the settings card shows.

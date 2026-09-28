@@ -17,6 +17,11 @@ the model never sees fake `"Error: ..."` success values.
 | `memcommit` | Commit the current session and extract persistent memories |
 | `memlearn` | Deliberately capture a reusable lesson (dedupe-merge into an existing memory) or mint/update a skill playbook |
 
+On hosts with Agent Teams enabled, a twelfth tool appears: `memsearchTeam`
+(team-scoped semantic search over an explicit `team_session_id` — same
+`auto`/`fast`/`deep` semantics, never falling back to the caller's own
+session). Non-team deployments see exactly the eleven tools above.
+
 ## Behavior notes
 
 - **`memadd`** accepts exactly one destination form — `to` (exact target)
@@ -52,7 +57,7 @@ the model never sees fake `"Error: ..."` success values.
     session commits).
   Lessons are redacted for common secret shapes before anything touches the
   wire, and on success the lesson is deferred into the current agent turn as
-  plugin-sourced context (`source.kind` `plugin`), so it takes effect
+  plugin-sourced context (`source.kind` `dsh-openviking`), so it takes effect
   immediately and is never mirrored back or re-extracted.
 
 ## Automatic behavior
@@ -61,9 +66,8 @@ the model never sees fake `"Error: ..."` success values.
 
 Direct children of `viking://resources/` are listed (TTL-cached per
 `repoContext.cacheTtlMs`) and injected into the prompt so the model knows
-what is indexed. Refreshed at mount, queued on `agent/session-start`, and
-awaited once per `agent/pre-step`. Failures keep the last successful cache
-and emit one deduplicated warning.
+what is indexed. Refreshed at mount and awaited once per `agent/pre-step`.
+Failures keep the last successful cache and emit one deduplicated warning.
 
 ### Auto recall
 
@@ -164,7 +168,7 @@ keep the uncommitted set for retry.
 
 ### Session-start memory map
 
-On `agent/session-start` the plugin builds a one-shot `<memory-library>`
+On `agent/created` the plugin builds a one-shot `<memory-library>`
 block (category counts + retrieval guidance, from `/api/v1/stats/memories`)
 injected through the context-injection channel — an oh-my-pi style Memory
 Guidance. It orients the agent about what the library holds without

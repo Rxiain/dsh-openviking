@@ -2,6 +2,7 @@
 [![Node: ^22.19.0 || >=24.0.0](<https://img.shields.io/badge/Node-%5E22.19.0%20%7C%7C%20%3E%3D24.0.0-339933>)](package.json)
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6)](https://www.typescriptlang.org/)
 [![DeepSeek Harness](<https://img.shields.io/badge/Platform-DeepSeek%20Harness-4B32C3>)](https://deepseek-harness.github.io/deepseek-harness/)
+[![DSH: >=0.1.7-rc.2](https://img.shields.io/badge/DSH-%3E%3D0.1.7--rc.2-4B32C3)](package.json)
 [![OpenViking](https://img.shields.io/badge/Service-OpenViking-0052CC)](https://github.com/volcengine/OpenViking)
 
 **简体中文** | [English](README_EN.md)
@@ -51,6 +52,9 @@
 | 维护       | 靠手工整理                 | 观察者队列自动完成嵌入、摘要生成与内容重组（`memqueue` 可查状态）                                          |
 
 ## 快速开始
+
+推荐：在 DSH `0.1.7+` 的 Web UI **插件管理（Plugin Manager）** 页面直接安装
+OpenViking（本地化标题 + 图标开箱即用）。以下 CLI 方式仍可作为 fallback：
 
 ```sh
 # 一键安装（GitHub 仓库，含预构建 lib/，无需构建授权）：
