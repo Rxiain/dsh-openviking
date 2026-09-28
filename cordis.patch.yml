@@ -12,7 +12,13 @@
 # `apiKey: !!js process.env.OPENVIKING_API_KEY ?? ''`.
 - insert:
     - id: openviking
-      name: 'dsh-openviking'
+      icon: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="%23121826"/><path d="M6 9 L6 24 L26 24 L26 9 L13 9 L13 7 L19 7" fill="none" stroke="%2364b5ff" stroke-width="1.6"/><circle cx="20" cy="14" r="2.2" fill="%2364b5ff"/></svg>'
+      name:
+          zh: 'OpenViking 记忆'
+          en: 'OpenViking Memory'
+      description:
+          zh: '为 DeepSeek Harness 提供 OpenViking 语义检索、资源管理与自动记忆'
+          en: 'OpenViking semantic retrieval, resource management, and auto-recall for DeepSeek Harness'
       config:
         # OpenViking HTTP service base URL. The plugin talks HTTP only — it
         # never shells out to the `ov` CLI and never starts a server.
