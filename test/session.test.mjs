@@ -84,6 +84,7 @@ test("sync sends only real user and assistant text using canonical text extracti
       data: {
         turn: 1,
         step: 1,
+        stream: [],
         message: {
           id: "a1",
           role: "assistant",

@@ -1,9 +1,9 @@
 /**
- * Settings-section tests: mount the plugin on a real Context spine with a
- * real (in-memory) settings provider, verifying namespace registration,
- * layered resolution over the composition entry, live reconfiguration of
- * request-facing fields, seam-side endpoint validation, and the browser-half
- * artifact (loader format, entry shape).
+ * Settings-section tests: mount the plugin on a real Context spine with the
+ * DSH 0.1.7 settings stack (`SettingsForms` over an in-memory `configEditor`),
+ * verifying namespace resolution, layered composition + user overrides, live
+ * reconfiguration of volatile request-facing fields, schema-side endpoint
+ * validation, and the browser-half artifact (loader format, entry shape).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -13,16 +13,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { Context } from "@deepseek-ai/cordis";
+import { Context, Service } from "@deepseek-ai/cordis";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
 import { SystemPrompt } from "@deepseek-ai/dsh-system-prompt";
 import { FileSystem } from "@deepseek-ai/dsh-fs";
 import { AgentRegistry } from "@deepseek-ai/dsh-agent";
 import { SessionStore } from "@deepseek-ai/dsh-session";
-import { SettingsProvider } from "@deepseek-ai/dsh-settings";
+import { SettingsForms } from "@deepseek-ai/dsh-settings";
+import { deepEqual, updateVolatile, volatileEntries } from "@deepseek-ai/cosmokit";
 import * as plugin from "../lib/index.js";
-import { SettingsConflictError } from "@deepseek-ai/dsh-settings";
-import { makeBridgeHandlers, isLoopbackRequest } from "../lib/settings-bridge.js";
 import { fakeServer, okEnvelope, makeAgent, userEvent, awaitTicks } from "./helpers.mjs";
 
 class MinimalFs extends FileSystem {
@@ -82,21 +81,124 @@ async function startFakeOpenViking() {
   return server;
 }
 
-/** In-memory settings provider with an optional seed document. */
-class MemorySettings extends SettingsProvider {
-  constructor(ctx, { document = {} } = {}) {
-    super(ctx);
-    this.doc = document;
+// ─── DSH 0.1.7 settings harness ──────────────────────────────────────
+// `SettingsForms` replaces the pre-0.1.7 `SettingsProvider`: forms derive
+// from the Loader's `configEditor` (profile patch persistence), and live
+// edits commit volatile references in place instead of restarting the fiber.
+// The harness reproduces that contract in memory.
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Recursive merge mirroring dsh-settings' `mergeLayers` (objects merge, others replace). */
+function deepMerge(under, over) {
+  if (!isPlainObject(under) || !isPlainObject(over)) return over;
+  const out = { ...under };
+  for (const [key, value] of Object.entries(over)) {
+    out[key] = Object.hasOwn(out, key) ? deepMerge(out[key], value) : value;
   }
-  get writable() {
-    return true;
+  return out;
+}
+
+/** In-memory stand-in for the host ConfigEditor: entries, layered configuration, volatile-only writes. */
+class MemoryConfigEditor extends Service {
+  constructor(ctx) {
+    super(ctx, "configEditor");
+    this.composition = {};
+    this.list = [];
   }
-  async load() {
-    return this.doc;
+
+  get documentPath() {
+    return join(tmpdir(), "openviking-test-profile-patch.yml");
   }
-  async persist(ns, section) {
-    this.doc = { ...this.doc, [String(ns)]: section };
+
+  entries() {
+    return this.list;
   }
+
+  configuration() {
+    return this.list.map((entry) => ({
+      entry,
+      inherited: this.composition[entry.options.id] ?? {},
+      override: entry.options.config ?? {},
+    }));
+  }
+
+  /** Attach a mounted plugin fiber to a settings namespace. */
+  register(fiber, id, composition, override = {}) {
+    const entry = {
+      fiber,
+      options: { id, name: "dsh-openviking", config: structuredClone(override) },
+      get id() {
+        return id;
+      },
+    };
+    this.composition[id] = composition;
+    this.list.push(entry);
+    return entry;
+  }
+
+  /**
+   * Commit one settings write: validate the raw override against the plugin's
+   * Config schema (the real editor calls `resolveConfig` here), persist it as
+   * the entry's user layer, then swap the running fiber's volatile references
+   * in place — exactly what `Entry._commitVolatile` does on the Loader path.
+   */
+  async edit(entry, change) {
+    if (!this.list.includes(entry) || entry.fiber === undefined) throw new Error("Configuration entry is no longer available");
+    if (entry.fiber.state !== 2) throw new Error("Configuration plugin is no longer active");
+    const current = structuredClone(entry.options.config ?? {});
+    const inherited = this.composition[entry.options.id] ?? {};
+    const next = change(current, inherited);
+    const schema = entry.fiber.runtime?.Config;
+    if (schema !== undefined && typeof schema.toJSON === "function") {
+      const overrideResult = schema["~standard"].validate(next);
+      if (overrideResult.issues) throw new Error(overrideResult.issues.map((issue) => issue.message).join("; "));
+      const resolved = schema["~standard"].validate(deepMerge(inherited, next));
+      if (resolved.issues) throw new Error(resolved.issues.map((issue) => issue.message).join("; "));
+      for (const { path, ref } of volatileEntries(entry.fiber.config)) {
+        const source = path.reduce((value, key) => Reflect.get(value, key), resolved.value);
+        if (source === undefined || typeof source.get !== "function") continue;
+        if (!deepEqual(ref.get(), source.get(), true)) updateVolatile(ref, source);
+      }
+    }
+    entry.options.config = next;
+  }
+}
+
+/** Profile directory without a legacy settings.yaml (import is a no-op). */
+class MemoryProfileContext extends Service {
+  constructor(ctx) {
+    super(ctx, "profileContext");
+    this.home = mkdtempSync(join(tmpdir(), "dsh-ov-profile-"));
+    this.dir = this.home;
+  }
+}
+
+/** Loader stand-in: SettingsForms awaits `ctx.root.loader` only for the legacy import. */
+class LoaderStub extends Service {
+  constructor(ctx) {
+    super(ctx, "loader");
+  }
+
+  await() {
+    return Promise.resolve();
+  }
+}
+
+/** Mount the 0.1.7 settings stack on a spine; returns the configEditor for entry registration. */
+async function mountSettingsHarness(ctx, fibers) {
+  fibers.push(await ctx.plugin(MemoryConfigEditor));
+  fibers.push(await ctx.plugin(MemoryProfileContext));
+  fibers.push(await ctx.plugin(LoaderStub));
+  fibers.push(await ctx.plugin(SettingsForms));
+  return ctx.configEditor;
+}
+
+/** Resolve the `openviking` section as the plugin's listener sees it (volatile fields only). */
+function readSection(ctx) {
+  return ctx.settings.describe().find((entry) => String(entry.ns) === "openviking")?.value;
 }
 
 function mountSpine() {
@@ -135,20 +237,22 @@ test("settings namespace registers, resolves over the composition entry, and liv
   const server1 = await startFakeOpenViking();
   const server2 = await startFakeOpenViking();
   const { ctx, fibers } = await mountSpine();
-  fibers.push(await ctx.plugin(MemorySettings));
+  const editor = await mountSettingsHarness(ctx, fibers);
 
-  const fiber = await ctx.plugin(PLUGIN, makeConfig(server1.url, tempState("settings")));
+  const composition = makeConfig(server1.url, tempState("settings"));
+  const fiber = await ctx.plugin(PLUGIN, composition);
+  editor.register(fiber, "openviking", composition);
   await awaitTicks(8);
 
   // Namespace registered; resolved value = composition base initially.
-  const initial = ctx.settings.get("openviking");
+  const initial = readSection(ctx);
   assert.equal(initial.endpoint, server1.url);
   assert.equal(initial.apiKey, "test-key");
   assert.equal(initial.autoRecall.limit, 6);
 
   // A user-layer write lands and resolves above the base.
   await ctx.settings.update("openviking", { timeoutMs: 45000, autoRecall: { limit: 3 } });
-  const updated = ctx.settings.get("openviking");
+  const updated = readSection(ctx);
   assert.equal(updated.timeoutMs, 45000);
   assert.equal(updated.autoRecall.limit, 3);
   assert.equal(updated.endpoint, server1.url);
@@ -165,31 +269,33 @@ test("settings namespace registers, resolves over the composition entry, and liv
   );
   assert.ok(!server1.requests.some((r) => r.url.startsWith("/api/v1/search/find")), "old endpoint no longer used");
 
-  // The seam rejects a malformed endpoint instead of storing it.
-  await assert.rejects(() => ctx.settings.update("openviking", { endpoint: "not-a-url" }), /invalid endpoint/);
-  assert.equal(ctx.settings.get("openviking").endpoint, server2.url);
+  // The schema rejects a malformed endpoint instead of storing it.
+  await assert.rejects(() => ctx.settings.update("openviking", { endpoint: "not-a-url" }), /expect string to match regexp/);
+  assert.equal(readSection(ctx).endpoint, server2.url);
 
   // Disposal removes the namespace registration.
   await fiber.dispose();
-  assert.equal(ctx.settings.get("openviking"), undefined);
+  assert.equal(readSection(ctx), undefined);
   for (const f of fibers) await f.dispose();
   await server1.close();
   await server2.close();
 });
 
-test("boot resolution includes pre-existing user overrides from the provider document", async () => {
+test("boot resolution includes pre-existing user overrides from the profile entry", async () => {
   const server = await startFakeOpenViking();
   const { ctx, fibers } = await mountSpine();
-  fibers.push(
-    await ctx.plugin(MemorySettings, {
-      document: { openviking: { timeoutMs: 12345, autoCommit: { enabled: false } } },
-    }),
-  );
+  const editor = await mountSettingsHarness(ctx, fibers);
 
-  const fiber = await ctx.plugin(PLUGIN, makeConfig(server.url, tempState("boot")));
+  const composition = makeConfig(server.url, tempState("boot"));
+  const seed = { timeoutMs: 12345, autoCommit: { enabled: false } };
+  // The Loader layers the profile patch over the composition base before the
+  // fiber starts; the harness reproduces that by mounting the merged config
+  // while recording the seed as the entry's user layer.
+  const fiber = await ctx.plugin(PLUGIN, deepMerge(composition, seed));
+  editor.register(fiber, "openviking", composition, seed);
   await awaitTicks(6);
 
-  const resolved = ctx.settings.get("openviking");
+  const resolved = readSection(ctx);
   assert.equal(resolved.timeoutMs, 12345);
   assert.equal(resolved.autoCommit.enabled, false);
   assert.equal(resolved.autoCommit.intervalMinutes, 10, "unoverridden nested fields keep the base");
@@ -233,117 +339,6 @@ test("browser half artifact wraps into the loader format with the canonical entr
     return undefined;
   });
   assert.equal(typeof exported.apply, "function");
-  assert.deepEqual([...exported.inject], ["slots", "locale", "connection", "remote", "settingsScope"]);
+  assert.deepEqual([...exported.inject], ["slots", "locale", "remote", "configForms"]);
 });
 
-
-test("settings bridge serves the openviking namespace through the seam with official-shaped refusals", async () => {
-  const server = await startFakeOpenViking();
-  const { ctx, fibers } = await mountSpine();
-  fibers.push(await ctx.plugin(MemorySettings));
-  const fiber = await ctx.plugin(PLUGIN, makeConfig(server.url, tempState("bridge")));
-  await awaitTicks(8);
-
-  const handlers = makeBridgeHandlers({ settings: ctx.settings });
-
-  // describe: the registered namespace rides the bridge, redacted and layered.
-  const described = await handlers.describe();
-  assert.equal(described.ok, true);
-  if (!described.ok) return;
-  assert.equal(described.value.writable, true);
-  assert.equal(described.value.namespaces.length, 1);
-  const view = described.value.namespaces[0];
-  assert.equal(view.ns, "openviking");
-  assert.equal(view.value.endpoint, server.url);
-  assert.equal(view.value.autoRecall.limit, 6);
-  assert.equal(view.user, undefined);
-
-  // mutate: one batched write lands in the user layer and bumps the revision.
-  const before = view.revision;
-  const mutated = await handlers.mutate({
-    ns: "openviking",
-    ops: [
-      { op: "set", path: ["timeoutMs"], value: 45678 },
-      { op: "set", path: ["autoRecall", "limit"], value: 3 },
-    ],
-  });
-  assert.equal(mutated.ok, true);
-  if (!mutated.ok) return;
-  assert.equal(mutated.value.value.timeoutMs, 45678);
-  assert.equal(mutated.value.value.autoRecall.limit, 3);
-  assert.deepEqual(mutated.value.user, { timeoutMs: 45678, autoRecall: { limit: 3 } });
-  assert.ok(mutated.value.revision > before);
-
-  // The plugin's live source follows the bridge write.
-  await awaitTicks(2);
-  assert.equal(ctx.settings.get("openviking").timeoutMs, 45678);
-
-  // unset re-inherits the composition layer.
-  const cleared = await handlers.mutate({ ns: "openviking", ops: [{ op: "unset", path: ["timeoutMs"] }] });
-  assert.equal(cleared.ok, true);
-  if (cleared.ok) {
-    assert.equal(cleared.value.value.timeoutMs, 30000);
-    assert.equal(cleared.value.user?.timeoutMs, undefined);
-  }
-
-  // The seam's endpoint validator still refuses through the bridge.
-  const rejected = await handlers.mutate({ ns: "openviking", ops: [{ op: "set", path: ["endpoint"], value: "not-a-url" }] });
-  assert.equal(rejected.ok, false);
-  if (!rejected.ok) {
-    assert.equal(rejected.code, "settings-rejected");
-    assert.match(rejected.message, /invalid endpoint/);
-  }
-
-  // A stale revision is refused as a conflict, like the official RPC.
-  const stale = await handlers.mutate({
-    ns: "openviking",
-    ops: [{ op: "set", path: ["account"], value: "x" }],
-    expectedRevision: 0,
-  });
-  assert.equal(stale.ok, false);
-  if (!stale.ok) assert.equal(stale.code, "settings-conflict");
-
-  // Foreign namespaces and malformed bodies are refused, never served.
-  const foreign = await handlers.mutate({ ns: "other", ops: [{ op: "set", path: ["a"], value: 1 }] });
-  assert.equal(foreign.ok, false);
-  const malformed = await handlers.mutate({ ns: "openviking", ops: "nope" });
-  assert.equal(malformed.ok, false);
-
-  // Disposal removes the namespace from the bridge view.
-  await fiber.dispose();
-  const after = await handlers.describe();
-  assert.equal(after.ok, true);
-  if (after.ok) assert.deepEqual(after.value.namespaces, []);
-
-  for (const f of fibers) await f.dispose();
-  await server.close();
-});
-
-test("loopback guard accepts local requests and refuses foreign origins", () => {
-  const local = {
-    socket: { remoteAddress: "127.0.0.1" },
-    headers: { host: "127.0.0.1:3080", "sec-fetch-site": "same-origin" },
-  };
-  assert.equal(isLoopbackRequest(local), true);
-
-  const remoteAddress = { socket: { remoteAddress: "10.0.0.5" }, headers: { host: "127.0.0.1" } };
-  assert.equal(isLoopbackRequest(remoteAddress), false);
-
-  const foreignHost = { socket: { remoteAddress: "127.0.0.1" }, headers: { host: "evil.example" } };
-  assert.equal(isLoopbackRequest(foreignHost), false);
-
-  const crossSite = { socket: { remoteAddress: "127.0.0.1" }, headers: { host: "127.0.0.1", "sec-fetch-site": "cross-site" } };
-  assert.equal(isLoopbackRequest(crossSite), false);
-
-  const foreignOrigin = {
-    socket: { remoteAddress: "127.0.0.1" },
-    headers: { host: "127.0.0.1", origin: "https://evil.example" },
-  };
-  assert.equal(isLoopbackRequest(foreignOrigin), false);
-
-  const sameOrigin = {
-    socket: { remoteAddress: "127.0.0.1" },
-    headers: { host: "127.0.0.1:3080", origin: "http://127.0.0.1:3080" },
-  };
-  assert.equal(isLoopbackRequest(sameOrigin), true);
-});

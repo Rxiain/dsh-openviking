@@ -229,6 +229,9 @@ export function assistantEvent(id, text, extra = {}) {
     data: {
       turn: 1,
       step: 1,
+      // DSH 0.1.7 session format: assistant settlements must carry a `stream`
+      // array (the exact timed model stream, compacted).
+      stream: [],
       message: {
         id,
         role: "assistant",

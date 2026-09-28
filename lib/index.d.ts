@@ -15,6 +15,14 @@
  */
 import z from "@deepseek-ai/schemastery";
 import type { Context } from "@deepseek-ai/cordis";
+declare module "@deepseek-ai/dsh-llm" {
+    interface MessageSourceMap {
+        "dsh-openviking": {
+            kind: "dsh-openviking";
+            plugin: "dsh-openviking";
+        };
+    }
+}
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "openviking";
 /** Services required by this plugin. `agents` guarantees the registry is ready and lets us adopt live agents. */
@@ -76,96 +84,96 @@ export interface Config {
     autoRecall: AutoRecallConfig;
     autoCommit: AutoCommitConfig;
 }
-export declare const Config: z<Schemastery.ObjectS<{
-    endpoint: z<string, string>;
-    apiKey: z<string, string>;
-    account: z<string, string>;
-    user: z<string, string>;
-    agentId: z<string, string>;
-    timeoutMs: z<number, number>;
-    stateFile: z<string, string>;
-    repoContext: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        cacheTtlMs: z<number, number>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        cacheTtlMs: z<number, number>;
-    }>>;
-    autoRecall: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        limit: z<number, number>;
-        scoreThreshold: z<number, number>;
-        maxContentChars: z<number, number>;
-        tokenBudget: z<number, number>;
-        agentSpaces: z<boolean, boolean>;
-        refreshSteps: z<number, number>;
-        startupMapEveryTurns: z<number, number>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        limit: z<number, number>;
-        scoreThreshold: z<number, number>;
-        maxContentChars: z<number, number>;
-        tokenBudget: z<number, number>;
-        agentSpaces: z<boolean, boolean>;
-        refreshSteps: z<number, number>;
-        startupMapEveryTurns: z<number, number>;
-    }>>;
-    autoCommit: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        turns: z<number, number>;
-        intervalMinutes: z<number, number>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        turns: z<number, number>;
-        intervalMinutes: z<number, number>;
-    }>>;
-}>, Schemastery.ObjectT<{
-    endpoint: z<string, string>;
-    apiKey: z<string, string>;
-    account: z<string, string>;
-    user: z<string, string>;
-    agentId: z<string, string>;
-    timeoutMs: z<number, number>;
-    stateFile: z<string, string>;
-    repoContext: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        cacheTtlMs: z<number, number>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        cacheTtlMs: z<number, number>;
-    }>>;
-    autoRecall: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        limit: z<number, number>;
-        scoreThreshold: z<number, number>;
-        maxContentChars: z<number, number>;
-        tokenBudget: z<number, number>;
-        agentSpaces: z<boolean, boolean>;
-        refreshSteps: z<number, number>;
-        startupMapEveryTurns: z<number, number>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        limit: z<number, number>;
-        scoreThreshold: z<number, number>;
-        maxContentChars: z<number, number>;
-        tokenBudget: z<number, number>;
-        agentSpaces: z<boolean, boolean>;
-        refreshSteps: z<number, number>;
-        startupMapEveryTurns: z<number, number>;
-    }>>;
-    autoCommit: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        turns: z<number, number>;
-        intervalMinutes: z<number, number>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        turns: z<number, number>;
-        intervalMinutes: z<number, number>;
-    }>>;
-}>>;
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    endpoint: z<string, string, "volatile-defined">;
+    apiKey: z<string, string, "volatile-defined">;
+    account: z<string, string, "volatile-defined">;
+    user: z<string, string, "volatile-defined">;
+    agentId: z<string, string, "volatile-defined">;
+    timeoutMs: z<number, number, "volatile-defined">;
+    stateFile: z<string, string, "defined">;
+    repoContext: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        cacheTtlMs: z<number, number, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        cacheTtlMs: z<number, number, "defined">;
+    }>>>, "volatile-defined">;
+    autoRecall: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        limit: z<number, number, "defined">;
+        scoreThreshold: z<number, number, "defined">;
+        maxContentChars: z<number, number, "defined">;
+        tokenBudget: z<number, number, "defined">;
+        agentSpaces: z<boolean, boolean, "defined">;
+        refreshSteps: z<number, number, "defined">;
+        startupMapEveryTurns: z<number, number, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        limit: z<number, number, "defined">;
+        scoreThreshold: z<number, number, "defined">;
+        maxContentChars: z<number, number, "defined">;
+        tokenBudget: z<number, number, "defined">;
+        agentSpaces: z<boolean, boolean, "defined">;
+        refreshSteps: z<number, number, "defined">;
+        startupMapEveryTurns: z<number, number, "defined">;
+    }>>>, "volatile-defined">;
+    autoCommit: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        turns: z<number, number, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        turns: z<number, number, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+    }>>>, "volatile-defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    endpoint: z<string, string, "volatile-defined">;
+    apiKey: z<string, string, "volatile-defined">;
+    account: z<string, string, "volatile-defined">;
+    user: z<string, string, "volatile-defined">;
+    agentId: z<string, string, "volatile-defined">;
+    timeoutMs: z<number, number, "volatile-defined">;
+    stateFile: z<string, string, "defined">;
+    repoContext: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        cacheTtlMs: z<number, number, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        cacheTtlMs: z<number, number, "defined">;
+    }>>>, "volatile-defined">;
+    autoRecall: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        limit: z<number, number, "defined">;
+        scoreThreshold: z<number, number, "defined">;
+        maxContentChars: z<number, number, "defined">;
+        tokenBudget: z<number, number, "defined">;
+        agentSpaces: z<boolean, boolean, "defined">;
+        refreshSteps: z<number, number, "defined">;
+        startupMapEveryTurns: z<number, number, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        limit: z<number, number, "defined">;
+        scoreThreshold: z<number, number, "defined">;
+        maxContentChars: z<number, number, "defined">;
+        tokenBudget: z<number, number, "defined">;
+        agentSpaces: z<boolean, boolean, "defined">;
+        refreshSteps: z<number, number, "defined">;
+        startupMapEveryTurns: z<number, number, "defined">;
+    }>>>, "volatile-defined">;
+    autoCommit: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        turns: z<number, number, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        turns: z<number, number, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+    }>>>, "volatile-defined">;
+}>>, "plain">;
 /**
  * Mount the plugin. The service may be unreachable: the plugin still loads,
  * normal conversation continues, and automatic layers skip with deduplicated
  * warnings while explicit tool calls throw clear errors.
  */
-export declare function apply(ctx: Context, config: Config): void;
+export declare function apply(ctx: Context, rawConfig: Config): void;
