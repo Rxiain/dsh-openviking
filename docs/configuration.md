@@ -125,13 +125,16 @@ The card is the plugin's browser half (`dsh.client` + `exports["./client"]`,
 built to `lib/client-ui.js`); the host serves it at
 `/plugins/dsh-openviking/client.js` in the web profile.
 
-Requires DSH `>= 0.1.7-rc.2` (peer range `^0.1.7-rc.2`): older hosts keep the
-previous `installSection` wiring and refuse the new `Config` schema.
+Requires DSH `>= 0.1.7-rc.2` (peer range `^0.1.7-rc.2 || ^0.2.0-rc.2`,
+covering the `0.1.7` stable line and the `0.2.0` prerelease line): older hosts
+keep the previous `installSection` wiring and refuse the new `Config` schema.
 
 ## Plugin Manager
 
 On DSH `0.1.7+` the plugin is also discoverable from the Web UI's
-**Plugin Manager** page: the `cordis.patch.yml` row carries the localized
-`name`/`description` plus the `icon`, and `package.json#icon` with
-`locale/en.json` + `locale/zh.json` (`meta.title`/`meta.description`) supply
-the listing copy — the same title/description the settings card shows.
+**Plugin Manager** page: the `cordis.patch.yml` row keeps `name` as the plain
+`'dsh-openviking'` package string (a localized map here fails the 0.1.7+
+boot preflight and disables the row) plus the `icon`, and
+`package.json#icon` with `locale/en.json` + `locale/zh.json`
+(`meta.title`/`meta.description`) supply the listing copy — the same
+title/description the settings card shows.
