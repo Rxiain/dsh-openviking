@@ -7,7 +7,8 @@
  *
  * Agent Teams helper: `memsearchTeam` is registered only when the host
  * exposes Agent Teams (see `isAgentTeamsAvailable`). Non-team deployments see
- * exactly the eleven base tools.
+ * exactly the eleven base tools. The helper is always team-session-scoped:
+ * it targets the session-scoped endpoint, never `/find`.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { defineTool, type ToolDefinition } from "@deepseek-ai/dsh-tools";
@@ -189,16 +190,11 @@ function defineMemsearchTeam(client: OpenVikingClient) {
   return defineTool({
     name: "memsearchTeam",
     description:
-      "Team-scoped OpenViking semantic search for Agent Teams teammates. Searches the team's shared OpenViking session directly (never the lead's session). Use from a teammate subagent to inherit the lead's working context without leaking reads back.",
+      "Team-scoped OpenViking semantic search for Agent Teams teammates. Searches the team's shared OpenViking session directly (never the lead's session) via the session-scoped endpoint. Use from a teammate subagent to inherit the lead's working context without leaking reads back.",
     parameters: {
       query: { type: "string", required: true, description: "Natural language query, question, or task description." },
       team_session_id: { type: "string", required: true, description: "OpenViking session ID of the team (from the teammate's team membership). Never defaults to the caller's own session." },
       target_uri: { type: "string", description: "Optional Viking URI scope, e.g. viking://resources/ or viking://user/memories/." },
-      mode: {
-        type: "string",
-        enum: ["auto", "fast", "deep"],
-        description: "auto chooses based on query complexity; fast uses /find; deep uses /search with the team session context.",
-      },
       limit: { type: "number", description: "Maximum number of results. Defaults to 10." },
       score_threshold: { type: "number", description: "Optional minimum score threshold." },
     },
@@ -211,27 +207,21 @@ function defineMemsearchTeam(client: OpenVikingClient) {
       // Team session only: no `exec.agent` fallback, no `ensureSession` on the
       // caller's session (that would couple the teammate to the lead's
       // lifecycle). Explicit team ids are the caller's concern.
+      //
+      // Always the session-scoped `/search`: `/find` rejects `session_id`
+      // (INVALID_ARGUMENT), so a "fast" team search would silently drop the
+      // team scope and read the caller's own or global context — the one
+      // thing this tool exists to prevent.
       const sessionId = args.team_session_id;
-      const mode = resolveSearchMode(args.mode, args.query, sessionId);
-      if (mode === "deep") {
-        const result = await client.search({
-          query: args.query,
-          targetUri: args.target_uri,
-          sessionId,
-          limit: args.limit ?? 10,
-          scoreThreshold: args.score_threshold,
-          signal: exec.signal,
-        });
-        return canonicalSearchValue("deep", args.query, result);
-      }
-      const result = await client.find({
+      const result = await client.search({
         query: args.query,
         targetUri: args.target_uri,
+        sessionId,
         limit: args.limit ?? 10,
         scoreThreshold: args.score_threshold,
         signal: exec.signal,
       });
-      return canonicalSearchValue("fast", args.query, result);
+      return canonicalSearchValue("deep", args.query, result);
     },
   });
 }

@@ -18,9 +18,10 @@ the model never sees fake `"Error: ..."` success values.
 | `memlearn` | Deliberately capture a reusable lesson (dedupe-merge into an existing memory) or mint/update a skill playbook |
 
 On hosts with Agent Teams enabled, a twelfth tool appears: `memsearchTeam`
-(team-scoped semantic search over an explicit `team_session_id` — same
-`auto`/`fast`/`deep` semantics, never falling back to the caller's own
-session). Non-team deployments see exactly the eleven tools above.
+(team-scoped semantic search over an explicit `team_session_id`, always through
+the session-scoped endpoint so the team context is never dropped, and never
+falling back to the caller's own session). Non-team deployments see exactly the
+eleven tools above.
 
 ## Behavior notes
 
