@@ -29,6 +29,11 @@ overrides go in the profile's own patch as a **complete** restatement.
 | `autoCommit.turns` | `3` | Commit after this many uncommitted **user turns** (oh-my-pi retain rhythm; `0` disables the turn trigger) |
 | `autoCommit.intervalMinutes` | `10` | Wall-clock fallback: flush sessions with uncommitted messages older than this. With `turns>0` a never-committed session still waits for the turn trigger; with `turns=0` (trigger disabled) the interval applies from the start |
 
+Either trigger is a *mid-session* trigger. A session that ends before reaching
+them (a short 1–2-turn session, or a long one closed early) is committed by
+the plugin's disposer, so its messages still become memories. Nothing is
+committed twice: the disposer skips sessions with nothing uncommitted.
+
 Procedure-intent recall (see [`docs/tools.md`](docs/tools.md)) reuses the
 `scoreThreshold` / `maxContentChars` / `tokenBudget` / `limit` knobs above
 and applies fixed, non-configurable bounds: tree discovery keeps at most 16

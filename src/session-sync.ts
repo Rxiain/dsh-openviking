@@ -835,6 +835,33 @@ export class SessionManager {
     }
     await Promise.allSettled(finalDrains);
 
+    // Final commit: a session that never reached the turn trigger or the
+    // wall-clock fallback (short sessions, and long ones closed early) would
+    // otherwise stay "synced but uncommitted" forever — the messages are on
+    // the server but OpenViking never extracts memories from them. Gated on
+    // `autoCommit.enabled`: disabling auto-commit means "never commit for me",
+    // and teardown must not sneak one in. A `pendingCommit` session is already
+    // committed server-side and awaiting extraction, so it is skipped rather
+    // than re-POSTed. Run before the abort so the POST still has a live
+    // background signal; a failure is logged, never thrown, so teardown always
+    // completes.
+    if (this.config.autoCommit.enabled) {
+      const finalCommits: Promise<void>[] = [];
+      for (const [key, state] of [...this.states]) {
+        if (state.uncommittedMessageIds.size === 0 || state.pendingCommit !== undefined) continue;
+        finalCommits.push(
+          this.runOnChain(key, async () => {
+            if (state.uncommittedMessageIds.size === 0 || state.pendingCommit !== undefined) return;
+            await this.postCommit(state, key, this.backgroundAbort.signal);
+          }).catch((error) => {
+            if (this.backgroundAbort.signal.aborted) return;
+            this.warnOnce("dispose-commit", key, error);
+          }),
+        );
+      }
+      await Promise.allSettled(finalCommits);
+    }
+
     // Stop background traffic now that the final drains have been attempted.
     this.backgroundAbort.abort();
     const chains = [...this.chains.values()];

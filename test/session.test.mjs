@@ -393,6 +393,70 @@ test("dispose runs a final drain for queued messages before saving state", async
   assert.deepEqual(sends2, ["first", "queued drain"], "pre-dispose queued drain runs during disposal");
 });
 
+test("dispose commits a session the turn trigger never reached", async () => {
+  // A 1-user-turn session never reaches `turns: 3`, and the wall-clock
+  // fallback only fires while the manager is alive. Before the fix such a
+  // session stayed "synced but uncommitted" forever, so OpenViking never
+  // extracted it (observed in the wild: 3 short sessions, commit_count 0).
+  const { client, calls } = stubSessionClient();
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 10 } });
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "hello")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "turn trigger did not fire before dispose");
+
+  await manager.dispose();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 1, "dispose commits the short session exactly once");
+});
+
+test("dispose does not commit a session with nothing uncommitted", async () => {
+  // Idempotence: a session that synced no messages must not gain a spurious
+  // commit (and thus an empty commit task) on teardown.
+  const { client, calls } = stubSessionClient();
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 10 } });
+  await manager.init();
+  const agent = makeAgent("agent-1", []);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  await manager.dispose();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "nothing uncommitted, nothing to commit");
+  assert.equal(calls.filter((c) => c.name === "addSessionMessage").length, 0, "no messages sent either");
+});
+
+test("dispose commits nothing when auto-commit is disabled", async () => {
+  // `autoCommit.enabled: false` means "never commit for me"; teardown must not
+  // sneak an automatic commit past that. A manual commit still works, and its
+  // uncommitted ids stay queued for a later manual retry.
+  const { client, calls } = stubSessionClient();
+  const { manager } = makeManager({ client, autoCommit: { enabled: false, turns: 3, intervalMinutes: 10 } });
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "one")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  await manager.dispose();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "auto-commit disabled: dispose leaves the session alone");
+});
+
+test("dispose does not re-POST a session whose commit task is still pending", async () => {
+  // A pending commit means the messages are already on the server awaiting
+  // extraction; re-POSTing duplicates work. Only tasks awaiting extraction are
+  // skipped — the uncommitted snapshot stays until the task resolves.
+  const { client, calls } = stubSessionClient();
+  const { manager } = makeManager({ client, autoCommit: { enabled: true, turns: 3, intervalMinutes: 10 } });
+  await manager.init();
+  const agent = makeAgent("agent-1", [userEvent("m1", "one")]);
+  manager.adopt(agent);
+  await manager.waitForChain(agent);
+  const state = manager.states.get("agent-1");
+  state.pendingCommit = { taskId: "task-7", startedAt: Date.now(), messageIds: ["user:m1"] };
+
+  await manager.dispose();
+  assert.equal(calls.filter((c) => c.name === "commitSession").length, 0, "pending commit is not re-POSTed on teardown");
+  const persisted = JSON.parse(readFileSync(manager.statePath, "utf8"));
+  assert.ok(persisted.sessions["agent-1"].pendingCommit, "pending task survives teardown for the next boot to poll");
+});
+
 test("adoption during state load defers until init completes and uses loaded state", async () => {
   const dir = tempDir();
   const stateFile = `${dir}/state.json`;
