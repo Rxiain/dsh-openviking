@@ -5,7 +5,7 @@ the model never sees fake `"Error: ..."` success values.
 
 | Tool | Description |
 | --- | --- |
-| `memsearch` | Semantic search (`auto`/`fast`/`deep`; deep uses session context) |
+| `memsearch` | Semantic search (`auto`/`fast`/`deep`; `auto` picks deep whenever a session is available — always, from an agent — and otherwise by query complexity; `fast` skips session context) |
 | `memfind` | Fast semantic find without session context |
 | `memread` | Read a `viking://` URI (`abstract`/`overview`/`read`/`auto`) |
 | `membrowse` | `list`/`tree`/`stat` views of the `viking://` filesystem |
@@ -18,9 +18,10 @@ the model never sees fake `"Error: ..."` success values.
 | `memlearn` | Deliberately capture a reusable lesson (dedupe-merge into an existing memory) or mint/update a skill playbook |
 
 On hosts with Agent Teams enabled, a twelfth tool appears: `memsearchTeam`
-(team-scoped semantic search over an explicit `team_session_id` — same
-`auto`/`fast`/`deep` semantics, never falling back to the caller's own
-session). Non-team deployments see exactly the eleven tools above.
+(team-scoped semantic search over an explicit `team_session_id`, always through
+the session-scoped endpoint so the team context is never dropped, and never
+falling back to the caller's own session). Non-team deployments see exactly the
+eleven tools above.
 
 ## Behavior notes
 

@@ -7,7 +7,8 @@
  *
  * Agent Teams helper: `memsearchTeam` is registered only when the host
  * exposes Agent Teams (see `isAgentTeamsAvailable`). Non-team deployments see
- * exactly the eleven base tools.
+ * exactly the eleven base tools. The helper is always team-session-scoped:
+ * it targets the session-scoped endpoint, never `/find`.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import { type ToolDefinition } from "@deepseek-ai/dsh-tools";

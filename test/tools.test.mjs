@@ -664,6 +664,34 @@ test("team helper: non-team hosts see exactly the eleven base tools", async () =
   assert.ok(!tools.some((t) => t.name === "memsearchTeam"), "no team surface without Agent Teams");
 });
 
+test("team helper: every team search is session-scoped, even when the caller asks for fast", async () => {
+  // `/find` rejects `session_id` (INVALID_ARGUMENT: Extra inputs are not
+  // permitted), so a fast team search would silently drop team scoping and
+  // read the caller's own/global context. The helper must always go through
+  // the session-scoped `/search`.
+  const { client, calls } = stubClient();
+  client.search = (opts) => {
+    calls.push({ name: "search", opts });
+    return Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  };
+  client.find = (opts) => {
+    calls.push({ name: "find", opts });
+    return Promise.resolve({ memories: [], resources: [], skills: [], total: 0 });
+  };
+  const teamCtx = { fs: stubFs().fs, get: (name) => (name === "teams" ? {} : undefined) };
+  const teamed = createOpenVikingTools(teamCtx, client, stubSessionManager(), { timeoutMs: 30000 });
+  const helper = teamed.find((t) => t.name === "memsearchTeam");
+  assert.ok(helper, "memsearchTeam registered when Agent Teams present");
+
+  await helper.execute(
+    { query: "short q", team_session_id: "team-123", mode: "fast" },
+    { signal: SIGNAL() },
+  );
+  const call = calls.find((c) => c.name === "search" || c.name === "find");
+  assert.equal(call.name, "search", "/find cannot carry a session: team search must use /search");
+  assert.equal(call.opts.sessionId, "team-123", "team session id travels on every team search");
+});
+
 test("team helper: memsearchTeam reads the team session directly, never the lead's", async () => {
   const { client, calls } = stubClient();
   client.search = (opts) => {
