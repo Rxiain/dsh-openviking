@@ -166,7 +166,10 @@ export function isAgentTeamsAvailable(ctx: unknown): boolean {
   const get = (ctx as { get?: (name: string) => unknown } | null | undefined)?.get;
   if (typeof get !== "function") return false;
   try {
-    if (get.call(ctx, "teams") !== undefined && get.call(ctx, "teams") !== null) return true;
+    // Single lookup: calling a cordis service getter twice is wasteful and,
+    // for a getter-backed service, not guaranteed to be side-effect free.
+    const teams = get.call(ctx, "teams");
+    if (teams !== undefined && teams !== null) return true;
     const tools = get.call(ctx, "tools") as { get?: (name: string) => unknown } | null | undefined;
     if (tools !== undefined && tools !== null && typeof tools.get === "function") {
       return tools.get("spawn_teammate") !== undefined && tools.get("spawn_teammate") !== null;
@@ -275,7 +278,8 @@ export function createOpenVikingTools(
       mode: {
         type: "string",
         enum: ["auto", "fast", "deep"],
-        description: "auto chooses based on query complexity; fast uses /find; deep uses /search with session context when available.",
+        description:
+          "fast uses /find (no session context); deep uses /search with the session context. auto picks deep whenever a session is available — which, from an agent, is always — and only falls back to query complexity (short = fast, question/long = deep) without one. Pass fast explicitly to skip session context.",
       },
       session_id: { type: "string", description: "Optional explicit OpenViking session ID for context-aware search." },
       limit: { type: "number", description: "Maximum number of results. Defaults to 10." },

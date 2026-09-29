@@ -5,7 +5,7 @@ the model never sees fake `"Error: ..."` success values.
 
 | Tool | Description |
 | --- | --- |
-| `memsearch` | Semantic search (`auto`/`fast`/`deep`; deep uses session context) |
+| `memsearch` | Semantic search (`auto`/`fast`/`deep`; `auto` picks deep whenever a session is available — always, from an agent — and otherwise by query complexity; `fast` skips session context) |
 | `memfind` | Fast semantic find without session context |
 | `memread` | Read a `viking://` URI (`abstract`/`overview`/`read`/`auto`) |
 | `membrowse` | `list`/`tree`/`stat` views of the `viking://` filesystem |

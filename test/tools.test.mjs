@@ -664,6 +664,16 @@ test("team helper: non-team hosts see exactly the eleven base tools", async () =
   assert.ok(!tools.some((t) => t.name === "memsearchTeam"), "no team surface without Agent Teams");
 });
 
+test("team helper: teams detection resolves the service exactly once", async () => {
+  // A getter-backed cordis service is not guaranteed to be side-effect free,
+  // so detection must not call `get("teams")` twice for one decision.
+  const { isAgentTeamsAvailable } = await import("../lib/tools.js");
+  const seen = [];
+  const ctx = { get: (name) => { seen.push(name); return name === "teams" ? {} : undefined; } };
+  assert.equal(isAgentTeamsAvailable(ctx), true);
+  assert.deepEqual(seen, ["teams"], "teams service resolved exactly once");
+});
+
 test("team helper: every team search is session-scoped, even when the caller asks for fast", async () => {
   // `/find` rejects `session_id` (INVALID_ARGUMENT: Extra inputs are not
   // permitted), so a fast team search would silently drop team scoping and
