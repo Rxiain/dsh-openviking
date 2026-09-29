@@ -1,7 +1,7 @@
 # dsh-openviking bundle patch.
 #
 # Inserts the OpenViking plugin row into the profile composition. Nothing in
-# the base bundle is disabled or replaced: the ten `mem*` tools are new names,
+# the base bundle is disabled or replaced: the `mem*` tools are new names,
 # so the default tool-fs rows stay untouched.
 #
 # Harness patches replace the targeted row's WHOLE `config` rather than merging
@@ -10,15 +10,17 @@
 # `--patch` overlay) — every key below must be repeated there. Environment
 # values can be bound with `!!js` expressions, e.g.
 # `apiKey: !!js process.env.OPENVIKING_API_KEY ?? ''`.
+#
+# NOTE (DSH 0.1.7+): `name` must stay a plain package-specifier string. The
+# boot preflight passes `row.name` to the manifest resolver, so a localized
+# `{zh, en}` map here disables the whole row with "peer dependencies cannot
+# be validated: name.startsWith is not a function". Localized display text
+# lives in `locale/en.json` + `locale/zh.json` (`meta.title`/`meta.description`,
+# read by `readPluginMeta` for the Plugin Manager) — not on this row.
 - insert:
     - id: openviking
       icon: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="%23121826"/><path d="M6 9 L6 24 L26 24 L26 9 L13 9 L13 7 L19 7" fill="none" stroke="%2364b5ff" stroke-width="1.6"/><circle cx="20" cy="14" r="2.2" fill="%2364b5ff"/></svg>'
-      name:
-          zh: 'OpenViking 记忆'
-          en: 'OpenViking Memory'
-      description:
-          zh: '为 DeepSeek Harness 提供 OpenViking 语义检索、资源管理与自动记忆'
-          en: 'OpenViking semantic retrieval, resource management, and auto-recall for DeepSeek Harness'
+      name: 'dsh-openviking'
       config:
         # OpenViking HTTP service base URL. The plugin talks HTTP only — it
         # never shells out to the `ov` CLI and never starts a server.
